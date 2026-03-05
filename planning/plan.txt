@@ -54,6 +54,7 @@ tools module:
         - There should be automatic implementations of the google functionDefinitions for each mixin,
         so that they can be easily called by gemini
 
+    !: All mixins for this class are decided in Config.json including:
 
     Class MixinToolAPI: (Runs asyncronously) (Manages the tools that are registered to the ToolAPI) (Mixin for tool api management)
         - Contains a function that retrieves all tools using the tool api
@@ -75,6 +76,7 @@ tools module:
 
 AIToolContainer module: (Owned by ToolAPI)
     - Ran within a docker container
+    - Different container for each profile: defined in config.json
     - Manages Tool creation and execution
     - Also manages tool search / file editing within the container
     - Listens and sends requests to the ToolAPI server

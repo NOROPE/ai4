@@ -1,0 +1,6 @@
+sounddevice
+google-genai
+python-dotenv
+docker
+numpy
+scipy

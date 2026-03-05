@@ -1,0 +1,5 @@
+{
+    "_comment": "Default profile — override any global config.json values here",
+    "system_instruction": "You are a helpful and friendly AI assistant.",
+    "voice": "Charon"
+}

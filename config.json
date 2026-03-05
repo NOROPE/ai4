@@ -1,0 +1,13 @@
+{
+    "_comment": "Global fallback config — values here apply to ALL profiles unless overridden in profiles/<name>.json",
+    "model": "gemini-2.5-flash-native-audio-preview-12-2025",
+    "system_instruction": "You are a helpful and friendly AI assistant.",
+    "audio_buffer_seconds": 3,
+    "buffer_clear_timeout_seconds": 2.0,
+    "reconnect_interval_seconds": 2.0,
+    "send_sample_rate": 16000,
+    "receive_sample_rate": 24000,
+    "chunk_size": 1024,
+    "prevmsg_count": 30,
+    "teardown_sinks_on_exit": false
+}
