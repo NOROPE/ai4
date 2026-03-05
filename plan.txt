@@ -3,19 +3,21 @@
 Libraries:
     sounddevice
     google.genAI
-
+    docker sdk
+    numpy / scipy for audio processing
+    logging
 Tools:
     Docker
     pipeWire
 
-Setup
+Setup:
     Load in the profile
         - Stored in config.json
         - Contains user preferences and settings for the tool
     Load the prevmsg.txt file
     Load the API key: stored in .env
-    Create the tool API
-    Create the tool Handler
+    Create & start the tool API
+        - This creates & starts the tool Handler in a docker container
     and register the ToolAPI with it - port
     Create/reuse 2 virtual audio sinks - AIOutput And AIInput
     Allow user to select sink
@@ -24,40 +26,57 @@ Shutdown:
     Save the profile
     Save the tools in the tool handler
     Stop the tool API server
-    Stop the tool handler
+        - This stops the tool handler and saves the tools
     Reset pipewire to default state
-    Save the last 30 messages from the log files to a prevmsg.txt file, delete the rest
-    
-Main Loop
+    Save the last 30 messages from the log files to a prevmsg.txt plain text file, delete the rest
+
+Note: Logging
+    use the logging library to log messages (including transcriptions) to the console
+    also use this to log transcriptions to a file, but only the transcriptions (no timestamps or other info)
+
+Main Loop: Uses asyncio to manage tasks and threads
     Google Gemini LIVE API
         - Use a live audio stream for input and output
         - Record text and transcriptions a logger which outputs both to the console and a file (the file ONLY contains the transcriptions)
             - Also handle tool requests and responses through the tools module
         - Buffer the output for 1.5 Seconds (Changable in config.json) to allow for better response times and more natural conversations
+            - This buffer will be cleared when no output is received for a set amount of time - set in config.json.
         - The output and input go to a user selected sink
+        - If the connection fails, retry every 2 seconds (or a time interval set in config.json) until it reconnects
         
 
     
 
-tools module
+tools module:
+    Class Tools: (Runs asyncronously) (Manages the tools that are registered to the ToolAPI)
+        - Tools to interact with the tool set
+        - Can be extended to include mixins for other tools like web browsers, file explorers, etc.
+        - There should be automatic implementations of the google functionDefinitions for each mixin,
+        so that they can be easily called by gemini
 
-Class ToolSet: (Accesses TOOLAPI)
-    - A collection of tools that can be accessed by gemini
-    - Each tool has a name, description, and a function that can be called
-    - Can Access TOOLAPI tools
 
-Class ToolAPI: Ran asyncronously in the background
-    - Uses a shared secret token for authentication between the tool handler and the API
-    - Creates the docker server and manages the tools that are registered to it
-    - Checks for open ports and hosts a server which can access multiple functions on the availiable port
-    - Allows running functions from the docker server
-    - Several functions can be registered to the API and called by the tool handler's scripts
+    Class MixinToolAPI: (Runs asyncronously) (Manages the tools that are registered to the ToolAPI) (Mixin for tool api management)
+        - Contains a function that retrieves all tools using the tool api
+            - This is ran on startup to inform gemini of the available tools, and can be ran periodically to update the tool list
+        - AI-created tools are not stored here, but can be accessed through the ToolAPI
+        - gemini uses a json format to handle tool calling, searching, and other management
+        - Manages the tools that are registered to the ToolAPI
+        - Allows searching for tools and running them from the main loop
+        - Can also manage tool responses and return them to the main loop for logging and output
 
-Future: Mixins for other tools like web browsers, file explorers, etc.
 
-tool handler module
+    Class ToolAPI: (Runs asyncronously) (Job: access docker container tools) (Manages docker container and tool registration)
+        - Uses a shared secret token for authentication between the tool handler and the API
+        - Creates the docker server and manages the tools that are registered to it
+        - Allows searching for tools and running them from the tool handler
+        - Checks for open ports and hosts a server which can access multiple functions on the available port
+        - Several functions can be registered to the API and called by the tool handler's scripts
+        - Closes the docker container on shutdown
+
+AIToolContainer module: (Owned by ToolAPI)
     - Ran within a docker container
     - Manages Tool creation and execution
+    - Also manages tool search / file editing within the container
     - Listens and sends requests to the ToolAPI server
     - Can run multiple tools at once and handle their responses
     - Saves tools on shutdown (docker commit) and loads them on startup
