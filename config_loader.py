@@ -59,6 +59,7 @@ _DEFAULTS: dict = {
     "receive_sample_rate": 24000,
     "chunk_size": 1024,
     "prevmsg_count": 30,
+    "tool_mixins": [],
 }
 
 
@@ -96,6 +97,9 @@ class ProfileConfig:
 
     # Voice — None means prompt at startup
     voice: str | None
+
+    # Tool mixins — list of mixin names to activate (e.g. ["system_info"])
+    tool_mixins: list[str]
 
     # Behaviour flags
     teardown_sinks_on_exit: bool  # whether to remove virtual sinks on shutdown
@@ -161,6 +165,7 @@ def load_profile(name: str = "default") -> ProfileConfig:
         docker_container_name=merged.get("docker_container_name", f"ai4-{name}"),
         teardown_sinks_on_exit=bool(merged.get("teardown_sinks_on_exit", True)),
         voice=merged.get("voice", None),  # None = prompt at startup
+        tool_mixins=list(merged.get("tool_mixins", _DEFAULTS["tool_mixins"])),
         raw=merged,
     )
 

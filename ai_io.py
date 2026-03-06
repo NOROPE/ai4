@@ -6,11 +6,15 @@ including buffering, flush/discard sentinels, and transcription logging.
 
 import asyncio
 import logging
+from typing import TYPE_CHECKING
 
 import numpy as np
 import sounddevice as sd
 
 from audio.transcription import TranscriptionBuffer
+
+if TYPE_CHECKING:
+    from tools import Tools
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +74,7 @@ async def receive_and_play(
     buffer_fill_bytes: int,
     buffer_clear_timeout: float,
     transcription_logger: logging.Logger,
+    tools: Tools | None = None,
 ) -> None:
     """
     Receive audio and transcriptions from Gemini.
@@ -141,6 +146,23 @@ async def receive_and_play(
 
                     if sc.output_transcription and sc.output_transcription.text:
                         gemini_buf.append(sc.output_transcription.text)
+
+                # Handle tool calls from Gemini
+                tc = response.tool_call
+                if tc and tools:
+                    for fn_call in tc.function_calls:
+                        result = await tools.handle_call(
+                            fn_call.name, dict(fn_call.args)
+                        )
+                        from google.genai import types
+                        await session.send_tool_response(
+                            function_responses=[
+                                types.FunctionResponse(
+                                    name=fn_call.name,
+                                    response={"result": result},
+                                )
+                            ]
+                        )
 
             # Turn ended — flush audio tail then complete transcriptions
             play_queue.put_nowait(_FLUSH)

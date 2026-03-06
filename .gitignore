@@ -1,2 +1,5 @@
 .venv/
 .env
+tools/__pycache__/
+tools/mixins/__pycache__/
+audio/__pycache__/

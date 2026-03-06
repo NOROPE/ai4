@@ -19,6 +19,7 @@ from google.genai import types
 from ai_io import find_pulse_device, listen_and_send, receive_and_play
 from audio.pipewire import setup_sinks, teardown_sinks, select_sink
 from config_loader import ProfileConfig, VOICES, list_profiles, load_profile
+from tools import Tools
 
 # ---------------------------------------------------------------------------
 # Paths & environment
@@ -184,6 +185,7 @@ async def run_session(
     input_sink: str | None,
     stop_event: asyncio.Event,
     logger: logging.Logger,
+    tools: Tools,
 ) -> None:
     """Connect to Gemini Live API and run audio I/O; reconnect on failure."""
     client = genai.Client(api_key=GEMINI_API_KEY)
@@ -213,6 +215,7 @@ async def run_session(
         ),
         output_audio_transcription=types.AudioTranscriptionConfig(),
         input_audio_transcription=types.AudioTranscriptionConfig(),
+        tools=[tools.get_tool_config()] if tools.has_tools else [],
     )
 
     while not stop_event.is_set():
@@ -228,6 +231,7 @@ async def run_session(
                         session, output_device,
                         cfg.receive_sample_rate, buffer_fill_bytes,
                         cfg.buffer_clear_timeout_seconds, logger,
+                        tools,
                     )
                 )
                 done, pending = await asyncio.wait(
@@ -282,6 +286,10 @@ async def main() -> None:
 
     output_sink, input_sink = setup_audio(cfg, logger)
 
+    # Tool system — instantiate and set up mixins from profile
+    tools = Tools(cfg.tool_mixins, config=cfg)
+    await tools.setup()
+
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
 
@@ -294,8 +302,9 @@ async def main() -> None:
 
     logger.log(TRANSCRIPTION_LEVEL, "[system] Session started.")
 
-    await run_session(cfg, output_sink, input_sink, stop_event, logger)
+    await run_session(cfg, output_sink, input_sink, stop_event, logger, tools)
 
+    await tools.teardown()
     teardown_audio(cfg, logger)
     logger.info("AI4 shut down cleanly.")
 
