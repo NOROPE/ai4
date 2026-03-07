@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 MIXIN_REGISTRY: dict[str, str] = {
     "system_info": "tools.mixins.system_info",
     "live2d": "tools.mixins.live2d_mixin",
+    "chess": "tools.mixins.chess_mixin",
 }
 
 
@@ -161,7 +162,7 @@ class Tools:
         try:
             logger.info("Tool call: %s(%s)", function_name, args)
             result = await method(**args)
-            logger.info("Tool result: %s → %s", function_name, result[:200] if len(result) > 200 else result)
+            logger.info("Tool result: %s → %s", function_name, result)
             return result
         except Exception as exc:
             logger.error("Tool call '%s' failed: %s", function_name, exc)

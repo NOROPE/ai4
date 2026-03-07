@@ -1,0 +1,12 @@
+1. Refactor code to not be dependent on google genai
+
+2. make a folder called llm
+
+3. Give it the same functionality as google.genAI
+
+4. Add memories
+
+5. Profit
+
+
+FasterWhisper -> LM studio -> Kokoro

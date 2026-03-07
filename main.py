@@ -16,8 +16,8 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
-from ai_io import find_pulse_device, listen_and_send, receive_and_play
-from audio.pipewire import setup_sinks, teardown_sinks, select_sink
+from ai_io import listen_and_send, receive_and_play
+from audio.pipewire import setup_sinks, teardown_sinks
 from config_loader import ProfileConfig, VOICES, list_profiles, load_profile
 from tools import Tools
 
@@ -142,22 +142,16 @@ def setup_logging(cfg: ProfileConfig) -> logging.Logger:
 # ---------------------------------------------------------------------------
 
 
-def setup_audio(cfg: ProfileConfig, logger: logging.Logger) -> tuple[str | None, str | None]:
+def setup_audio(cfg: ProfileConfig, logger: logging.Logger) -> None:
     logger.info("Setting up PipeWire virtual sinks for profile '%s'...", cfg.name)
     try:
         setup_sinks(
             sink_output=cfg.pipewire_sink_output,
             sink_input=cfg.pipewire_sink_input,
         )
+        logger.info("Virtual sinks created. Use pavucontrol to route streams.")
     except RuntimeError as e:
         logger.error("PipeWire setup failed: %s", e)
-        return None, None
-
-    output_sink = select_sink("AI output (speakers)", kind="sinks", default=cfg.pipewire_sink_output)
-    input_sink = select_sink("AI input (microphone)", kind="sources", default=cfg.pipewire_sink_input)
-    logger.info("Selected output sink: %s", output_sink or "system default")
-    logger.info("Selected input sink:  %s", input_sink or "system default")
-    return output_sink, input_sink
 
 
 def teardown_audio(cfg: ProfileConfig, logger: logging.Logger) -> None:
@@ -181,8 +175,6 @@ def teardown_audio(cfg: ProfileConfig, logger: logging.Logger) -> None:
 
 async def run_session(
     cfg: ProfileConfig,
-    output_sink: str | None,
-    input_sink: str | None,
     stop_event: asyncio.Event,
     logger: logging.Logger,
     tools: Tools,
@@ -190,8 +182,6 @@ async def run_session(
     """Connect to Gemini Live API and run audio I/O; reconnect on failure."""
     client = genai.Client(api_key=GEMINI_API_KEY)
 
-    output_device = find_pulse_device()
-    input_device = find_pulse_device()
     buffer_fill_bytes = int(cfg.receive_sample_rate * 2 * cfg.audio_buffer_seconds)
 
     # Load previous conversation context for this profile
@@ -224,11 +214,11 @@ async def run_session(
             async with client.aio.live.connect(model=cfg.model, config=live_config) as session:
                 logger.info("Connected. Start speaking!")
                 listen_task = asyncio.create_task(
-                    listen_and_send(session, input_device, cfg.send_sample_rate, cfg.chunk_size)
+                    listen_and_send(session, None, cfg.send_sample_rate, cfg.chunk_size)
                 )
                 play_task = asyncio.create_task(
                     receive_and_play(
-                        session, output_device,
+                        session, None,
                         cfg.receive_sample_rate, buffer_fill_bytes,
                         cfg.buffer_clear_timeout_seconds, logger,
                         tools,
@@ -284,7 +274,7 @@ async def main() -> None:
     logger.info("Transcription log: %s", cfg.transcription_log_file)
     logger.info("API key present: %s", bool(GEMINI_API_KEY))
 
-    output_sink, input_sink = setup_audio(cfg, logger)
+    setup_audio(cfg, logger)
 
     # Tool system — instantiate and set up mixins from profile
     tools = Tools(cfg.tool_mixins, config=cfg)
@@ -302,7 +292,7 @@ async def main() -> None:
 
     logger.log(TRANSCRIPTION_LEVEL, "[system] Session started.")
 
-    await run_session(cfg, output_sink, input_sink, stop_event, logger, tools)
+    await run_session(cfg, stop_event, logger, tools)
 
     await tools.teardown()
     teardown_audio(cfg, logger)

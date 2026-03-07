@@ -1,7 +1,8 @@
 {
     "_comment": "Default profile — override any global config.json values here",
     "system_instruction": "You are a helpful and friendly AI assistant.",
-    "voice": "Charon",
+    "voice": "Erinome",
     "tool_mixins": ["live2d"],
-    "live2d_icon_path": "media/live2dpluginicon.png"
+    "live2d_icon_path": "media/live2dpluginicon.png",
+    "vtube_studio_mouse_tracking": true
 }

@@ -123,26 +123,18 @@ def select_sink(prompt_label: str = "output", kind: str = "sinks", default: str 
     default_label = f"'{default}'" if default else "system default"
     print(f"  [Enter] Use {default_label}")
 
-    def _select_and_set(name: str) -> str:
-        if kind == "sinks":
-            set_default_sink(name)
-        else:
-            set_default_source(name)
-        return name
-
     try:
         choice = input(f"Select sink for {prompt_label}: ").strip()
         if choice == "":
             if default:
-                # Try to find the default name in the device list
                 match = next((d["name"] for d in devices if default in d["name"]), None)
                 if match:
-                    return _select_and_set(match)
+                    return match
                 logger.warning("Default sink '%s' not found, using system default.", default)
             return None
         idx = int(choice)
         if 0 <= idx < len(devices):
-            return _select_and_set(devices[idx]["name"])
+            return devices[idx]["name"]
         logger.warning("Invalid selection, using system default.")
         return None
     except (ValueError, EOFError):

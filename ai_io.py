@@ -23,16 +23,26 @@ _FLUSH = object()    # end of turn: play remaining buffered audio
 _DISCARD = object()  # interruption: drop buffered audio
 
 
-def find_pulse_device() -> int | None:
+def find_device(name: str | None = None, kind: str = "output") -> int | None:
     """
-    Return the sounddevice index for the 'pulse' device, which routes audio
-    through PulseAudio and honours the default sink/source set via pactl.
+    Return the sounddevice index for the named PulseAudio/PipeWire device.
+    kind: 'output' (max_output_channels > 0) or 'input' (max_input_channels > 0).
+    If name is given, searches for a device whose name contains it (case-insensitive).
+    Falls back to the 'pulse' passthrough device, then system default.
     """
-    for i, dev in enumerate(sd.query_devices()):
-        if dev["name"].lower() == "pulse":
-            logger.debug("Using sounddevice 'pulse' (device #%d).", i)
+    ch_key = "max_output_channels" if kind == "output" else "max_input_channels"
+    devices = list(enumerate(sd.query_devices()))
+    if name:
+        for i, dev in devices:
+            if dev.get(ch_key, 0) > 0 and name.lower() in dev["name"].lower():
+                logger.debug("Using sounddevice '%s' (device #%d) for %s sink '%s'.", dev["name"], i, kind, name)
+                return i
+        logger.warning("Sounddevice for %s sink '%s' not found, falling back to 'pulse'.", kind, name)
+    for i, dev in devices:
+        if dev.get(ch_key, 0) > 0 and dev["name"].lower() == "pulse":
+            logger.debug("Using sounddevice 'pulse' (device #%d) for %s.", i, kind)
             return i
-    logger.warning("'pulse' sounddevice not found, falling back to system default.")
+    logger.warning("'pulse' sounddevice not found for %s, falling back to system default.", kind)
     return None
 
 
@@ -158,6 +168,7 @@ async def receive_and_play(
                         await session.send_tool_response(
                             function_responses=[
                                 types.FunctionResponse(
+                                    id=fn_call.id,
                                     name=fn_call.name,
                                     response={"result": result},
                                 )

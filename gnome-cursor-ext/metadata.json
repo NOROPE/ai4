@@ -1,0 +1,7 @@
+{
+    "uuid": "cursor-position@ai4",
+    "name": "AI4 Cursor Position",
+    "description": "Exposes cursor position over DBus for AI4 eye tracking.",
+    "shell-version": ["45", "46", "47", "48", "49"],
+    "version": 1
+}

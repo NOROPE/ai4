@@ -26,12 +26,12 @@ logger = logging.getLogger(__name__)
 # @tool_function decorator — attaches schema metadata to a method
 # ---------------------------------------------------------------------------
 
-# Maps Python type annotations → OpenAPI-style type strings for Gemini
-_PY_TO_SCHEMA: dict[type, str] = {
-    str: "STRING",
-    int: "INTEGER",
-    float: "NUMBER",
-    bool: "BOOLEAN",
+# Maps Python type annotations → google.genai Type enum values
+_PY_TO_SCHEMA: dict[type, types.Type] = {
+    str: types.Type.STRING,
+    int: types.Type.INTEGER,
+    float: types.Type.NUMBER,
+    bool: types.Type.BOOLEAN,
 }
 
 
@@ -40,11 +40,13 @@ class _ToolMeta:
     """Metadata stashed on a decorated method by @tool_function."""
     description: str
     parameter_descriptions: dict[str, str] = field(default_factory=dict)
+    behavior: str | None = None
 
 
 def tool_function(
     description: str,
     parameter_descriptions: dict[str, str] | None = None,
+    behavior: str | None = None,
 ) -> Callable:
     """
     Mark a mixin method as a callable tool for Gemini.
@@ -65,6 +67,7 @@ def tool_function(
         fn._tool_meta = _ToolMeta(  # type: ignore[attr-defined]
             description=description,
             parameter_descriptions=parameter_descriptions or {},
+            behavior=behavior,
         )
         return fn
     return decorator
@@ -115,7 +118,7 @@ class ToolMixin:
         declarations: list[types.FunctionDeclaration] = []
         for name, method, meta in self._get_tool_methods():
             hints = get_type_hints(method)
-            properties: dict[str, Any] = {}
+            properties: dict[str, types.Schema] = {}
             required: list[str] = []
 
             sig = inspect.signature(method)
@@ -123,26 +126,27 @@ class ToolMixin:
                 if param_name == "self":
                     continue
                 py_type = hints.get(param_name, str)
-                schema_type = _PY_TO_SCHEMA.get(py_type, "STRING")
-                prop: dict[str, Any] = {"type": schema_type}
+                schema_type = _PY_TO_SCHEMA.get(py_type, types.Type.STRING)
+                prop_kwargs: dict[str, Any] = {"type": schema_type}
                 if param_name in meta.parameter_descriptions:
-                    prop["description"] = meta.parameter_descriptions[param_name]
-                properties[param_name] = prop
+                    prop_kwargs["description"] = meta.parameter_descriptions[param_name]
+                properties[param_name] = types.Schema(**prop_kwargs)
                 if param.default is inspect.Parameter.empty:
                     required.append(param_name)
 
-            schema: dict[str, Any] = {
-                "type": "OBJECT",
-                "properties": properties,
-            }
-            if required:
-                schema["required"] = required
-
-            declarations.append(
-                types.FunctionDeclaration(
-                    name=name,
-                    description=meta.description,
-                    parameters=types.Schema(defs=schema),
-                )
+            params_schema = types.Schema(
+                type=types.Type.OBJECT,
+                properties=properties,
             )
+            if required:
+                params_schema.required = required
+
+            decl_kwargs: dict[str, Any] = dict(
+                name=name,
+                description=meta.description,
+                parameters=params_schema,
+            )
+            if meta.behavior:
+                decl_kwargs["behavior"] = meta.behavior
+            declarations.append(types.FunctionDeclaration(**decl_kwargs))
         return declarations
