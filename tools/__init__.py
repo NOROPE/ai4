@@ -9,6 +9,8 @@ profile's ``tool_mixins`` list.  It:
 * Auto-generates ``google.genai.types.FunctionDeclaration`` objects for
   Gemini's ``LiveConnectConfig``.
 * Dispatches incoming tool calls to the correct mixin method.
+nd implement them in the `tools/mixins/` directory.
+Make sure to add new mixins to the `MIXIN_REGISTRY` below, a
 """
 
 from __future__ import annotations
@@ -31,6 +33,7 @@ logger = logging.getLogger(__name__)
 # that contains the ToolMixin subclass.
 MIXIN_REGISTRY: dict[str, str] = {
     "system_info": "tools.mixins.system_info",
+    "live2d": "tools.mixins.live2d_mixin",
 }
 
 

@@ -103,11 +103,12 @@ def list_audio_devices(kind: str = "sinks") -> list[dict]:
     return devices
 
 
-def select_sink(prompt_label: str = "output", kind: str = "sinks") -> str | None:
+def select_sink(prompt_label: str = "output", kind: str = "sinks", default: str | None = None) -> str | None:
     """
     Interactively prompt the user to select an audio sink or source,
     then set it as the PulseAudio default so sounddevice's 'pulse' device routes there.
     kind: 'sinks' for output devices, 'sources' for input/capture devices.
+    default: name of the device to use when the user presses Enter (None = system default).
     Returns the selected device name, or None to use the system default.
     """
     devices = list_audio_devices(kind)
@@ -119,21 +120,29 @@ def select_sink(prompt_label: str = "output", kind: str = "sinks") -> str | None
     print(f"\nAvailable audio {label} (for {prompt_label}):")
     for i, dev in enumerate(devices):
         print(f"  [{i}] {dev['name']}")
-    print(f"  [Enter] Use system default")
+    default_label = f"'{default}'" if default else "system default"
+    print(f"  [Enter] Use {default_label}")
+
+    def _select_and_set(name: str) -> str:
+        if kind == "sinks":
+            set_default_sink(name)
+        else:
+            set_default_source(name)
+        return name
 
     try:
         choice = input(f"Select sink for {prompt_label}: ").strip()
         if choice == "":
+            if default:
+                # Try to find the default name in the device list
+                match = next((d["name"] for d in devices if default in d["name"]), None)
+                if match:
+                    return _select_and_set(match)
+                logger.warning("Default sink '%s' not found, using system default.", default)
             return None
         idx = int(choice)
         if 0 <= idx < len(devices):
-            name = devices[idx]["name"]
-            # Route the PulseAudio default so sounddevice's 'pulse' device uses it
-            if kind == "sinks":
-                set_default_sink(name)
-            else:
-                set_default_source(name)
-            return name
+            return _select_and_set(devices[idx]["name"])
         logger.warning("Invalid selection, using system default.")
         return None
     except (ValueError, EOFError):

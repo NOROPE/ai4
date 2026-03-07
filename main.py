@@ -153,8 +153,8 @@ def setup_audio(cfg: ProfileConfig, logger: logging.Logger) -> tuple[str | None,
         logger.error("PipeWire setup failed: %s", e)
         return None, None
 
-    output_sink = select_sink("AI output (speakers)", kind="sinks")
-    input_sink = select_sink("AI input (microphone)", kind="sources")
+    output_sink = select_sink("AI output (speakers)", kind="sinks", default=cfg.pipewire_sink_output)
+    input_sink = select_sink("AI input (microphone)", kind="sources", default=cfg.pipewire_sink_input)
     logger.info("Selected output sink: %s", output_sink or "system default")
     logger.info("Selected input sink:  %s", input_sink or "system default")
     return output_sink, input_sink
