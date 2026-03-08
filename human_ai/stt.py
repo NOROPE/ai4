@@ -26,7 +26,7 @@ import time
 from typing import Any
 
 import numpy as np
-from faster_whisper import WhisperModel  # type: ignore[import-untyped]
+from faster_whisper import WhisperModel
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 INTERRUPT = object()
 
 # VAD / ASR defaults (overridable via config.raw)
-_DEFAULT_VOLUME_THRESHOLD = 500       # RMS of int16 samples (0–32768)
+_DEFAULT_VOLUME_THRESHOLD = 2000       # RMS of int16 samples (0–32768)
 _DEFAULT_SILENCE_DURATION = 0.8       # seconds of quiet to end an utterance
 _DEFAULT_MIN_SPEECH_DURATION = 0.3    # seconds; shorter clips are discarded
 _DEFAULT_MODEL = "base"               # faster-whisper model name
@@ -71,12 +71,14 @@ class STT:
         self._volume_threshold: float = float(raw.get("stt_volume_threshold", _DEFAULT_VOLUME_THRESHOLD))
         self._silence_duration: float = float(raw.get("stt_silence_duration", _DEFAULT_SILENCE_DURATION))
         self._min_speech_duration: float = float(raw.get("stt_min_speech_duration", _DEFAULT_MIN_SPEECH_DURATION))
+        self._post_utterance_cooldown: float = float(raw.get("stt_post_utterance_cooldown", 0.6))
         self._model_name: str = str(raw.get("stt_model", _DEFAULT_MODEL))
         self._device: str = str(raw.get("stt_device", _DEFAULT_DEVICE))
         self._compute_type: str = str(raw.get("stt_compute_type", _DEFAULT_COMPUTE_TYPE))
         self._sample_rate: int = getattr(config, "send_sample_rate", 16000)
 
-        self._model: WhisperModel | None = None  # lazy-loaded on first transcription
+        self._model: WhisperModel | None = None
+        self._load_model()  # load eagerly at startup to avoid stall on first utterance
 
     # ------------------------------------------------------------------
     # Public interface
@@ -100,7 +102,10 @@ class STT:
         speech_buffer: list[bytes] = []
         in_speech = False
         last_speech_time: float = 0.0
+        last_utterance_time: float = 0.0
         interrupt_sent = False
+        _last_level_log: float = 0.0
+        _peak_rms: float = 0.0
 
         self._logger.info(
             "STT ready — threshold=%.0f, silence=%.2fs, model=%s",
@@ -113,7 +118,21 @@ class STT:
                 rms = _rms(chunk)
                 now = time.monotonic()
 
-                if rms >= self._volume_threshold:
+                # Log peak RMS every 3 s so you can verify audio is arriving.
+                _peak_rms = max(_peak_rms, rms)
+                if now - _last_level_log >= 3.0:
+                    self._logger.debug(
+                        "Mic level (peak/3 s): %.0f  (threshold: %.0f)",
+                        _peak_rms, self._volume_threshold,
+                    )
+                    _peak_rms = 0.0
+                    _last_level_log = now
+
+                # Ignore mic input briefly after an utterance is sent so trailing
+                # audio / mic ring-off doesn't immediately trigger an interrupt.
+                in_cooldown = (now - last_utterance_time) < self._post_utterance_cooldown
+
+                if rms >= self._volume_threshold and not in_cooldown:
                     # ---- speech frame ----
                     if not in_speech:
                         # Rising edge: speech just started
@@ -147,6 +166,7 @@ class STT:
                                 text = await asyncio.to_thread(self._transcribe, pcm)
                                 if text:
                                     self._logger.info("Transcribed: %r", text)
+                                    last_utterance_time = time.monotonic()
                                     await result_queue.put(text)
                                 else:
                                     self._logger.debug("Empty transcription, discarding.")
@@ -179,6 +199,8 @@ class STT:
         self._load_model()
         # Normalize int16 → float32 [-1, 1] as required by Whisper
         samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+        if self._model is None:
+            raise RuntimeError("Whisper model not loaded")
         segments, _ = self._model.transcribe(
             samples,
             language="en",

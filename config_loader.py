@@ -15,39 +15,6 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).parent
 
-# All available Gemini voices (from planning/voices.txt)
-VOICES: list[tuple[str, str]] = [
-    ("Zephyr",        "Bright"),
-    ("Puck",          "Upbeat"),
-    ("Charon",        "Informative"),
-    ("Kore",          "Firm"),
-    ("Fenrir",        "Excitable"),
-    ("Leda",          "Youthful"),
-    ("Orus",          "Firm"),
-    ("Aoede",         "Breezy"),
-    ("Callirrhoe",    "Easy-going"),
-    ("Autonoe",       "Bright"),
-    ("Enceladus",     "Breathy"),
-    ("Iapetus",       "Clear"),
-    ("Umbriel",       "Easy-going"),
-    ("Algieba",       "Smooth"),
-    ("Despina",       "Smooth"),
-    ("Erinome",       "Clear"),
-    ("Algenib",       "Gravelly"),
-    ("Rasalgethi",    "Informative"),
-    ("Laomedeia",     "Upbeat"),
-    ("Achernar",      "Soft"),
-    ("Alnilam",       "Firm"),
-    ("Schedar",       "Even"),
-    ("Gacrux",        "Mature"),
-    ("Pulcherrima",   "Forward"),
-    ("Achird",        "Friendly"),
-    ("Zubenelgenubi", "Casual"),
-    ("Vindemiatrix",  "Gentle"),
-    ("Sadachbia",     "Lively"),
-    ("Sadaltager",    "Knowledgeable"),
-    ("Sulafat",       "Warm"),
-]
 
 # Built-in defaults — lowest priority, never needs editing
 _DEFAULTS: dict = {
@@ -97,7 +64,7 @@ class ProfileConfig:
     docker_container_name: str = "ai4-default"
 
     # Voice — None means prompt at startup
-    voice: str | None = None
+    voice: str | None = "af_aoede"
 
     # Tool mixins — list of mixin names to activate (e.g. ["system_info"])
     tool_mixins: list[str] = None  # type: ignore[assignment]

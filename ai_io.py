@@ -17,7 +17,13 @@ import sounddevice as sd
 logger = logging.getLogger(__name__)
 
 # Sentinels for the audio_player queue
-_FLUSH = object()    # end of turn: play remaining buffered audio
+class Flush:
+    """End-of-turn flush.  If *ack* is provided it is set after playback completes."""
+    __slots__ = ("ack",)
+    def __init__(self, ack: asyncio.Event | None = None) -> None:
+        self.ack = ack
+
+_FLUSH = Flush()     # backward-compat singleton (no ack)
 _DISCARD = object()  # interruption: drop buffered audio
 
 
@@ -116,11 +122,17 @@ async def audio_player(
             chunk = await play_queue.get()
             if chunk is _DISCARD:
                 buffer.clear()
+                # Abort the stream to flush audio already in the device buffer,
+                # then restart so playback can resume immediately.
+                stream.abort()
+                stream.start()
                 continue
-            if chunk is _FLUSH:
+            if isinstance(chunk, Flush):
                 if buffer:
                     await asyncio.to_thread(stream.write, bytes(buffer))
                     buffer.clear()
+                if chunk.ack is not None:
+                    chunk.ack.set()
                 continue
             buffer.extend(chunk)
             if len(buffer) >= buffer_fill_bytes:

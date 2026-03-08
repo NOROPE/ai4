@@ -12,9 +12,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+import scipy.signal as sps
+import numpy as np
+import torch
 from kokoro import KPipeline
 from ai_io import _FLUSH
+from config_loader import ProfileConfig
+from human_ai.llm import SILENT_MARKER
 
 logger = logging.getLogger(__name__)
 
@@ -33,11 +37,11 @@ class TTS:
     ``_FLUSH`` so the audio_player plays any remaining buffered audio.
     """
 
-    def __init__(self, config: Any = None) -> None:
+    def __init__(self, config: ProfileConfig) -> None:
         self.config = config
+        self.voice = config.voice
         self._logger = logging.getLogger(f"{__name__}.TTS")
         self.pipeline = KPipeline(lang_code='a')
-        
 
     # ------------------------------------------------------------------
     # Public interface
@@ -58,35 +62,56 @@ class TTS:
                 token = await token_queue.get()
                 if not isinstance(token, str):
                     # End-of-turn sentinel (LLM._END or None on error)
-                    if pending.strip():
-                        await self._synthesize(pending.strip(), audio_queue)
+                    speakable = pending.strip().replace(SILENT_MARKER, "").strip()
+                    if speakable:
+                        await self._synthesize(speakable, audio_queue)
                     audio_queue.put_nowait(_FLUSH)
                     return
                 pending += token
                 if pending[-1] in _BOUNDARIES and pending.strip():
-                    await self._synthesize(pending.strip(), audio_queue)
+                    speakable = pending.strip().replace(SILENT_MARKER, "").strip()
+                    if speakable:
+                        await self._synthesize(speakable, audio_queue)
                     pending = ""
         except asyncio.CancelledError:
             audio_queue.put_nowait(_FLUSH)
             raise
 
     # ------------------------------------------------------------------
-    # Synthesis backend (stub — replace with real TTS call)
+    # Synthesis
     # ------------------------------------------------------------------
 
     async def _synthesize(self, text: str, audio_queue: asyncio.Queue) -> None:
-        """
-        Convert *text* to speech and put PCM byte chunks on *audio_queue*.
+        """Convert *text* to speech using Kokoro and put PCM chunks on *audio_queue*."""
+        chunks = await self.synthesize_one(text)
+        for chunk in chunks:
+            audio_queue.put_nowait(chunk)
 
-        TODO: call a real TTS API here and put the returned PCM bytes on
-        audio_queue.  Example sketch::
+    async def synthesize_one(self, text: str) -> list[bytes]:
+        """Synthesize *text* and return raw int16 PCM chunks (no queue side-effects)."""
+        self._logger.info("TTS: %s", text)
+        target_sr: int = getattr(self.config, "receive_sample_rate", 24000)
+        voice = self.voice
 
-            pcm_bytes = await my_tts_client.synthesize(text, sample_rate=24000)
-            audio_queue.put_nowait(pcm_bytes)
-        """
+        def _run_kokoro() -> list[bytes]:
+            chunks: list[bytes] = []
+            for _, _, audio in self.pipeline(
+                text,
+                voice=voice,
+                speed=1.0,
+                split_pattern=r'\n+',
+            ):
+                if audio is None or len(audio) == 0:
+                    continue
+                samples: np.ndarray = audio.numpy() if isinstance(audio, torch.Tensor) else np.asarray(audio, dtype=np.float32)
+                if target_sr != 24000:
+                    num_samples = int(round(len(samples) * target_sr / 24000))
+                    samples = np.array(sps.resample(samples, num_samples), dtype=np.float32)
+                pcm: bytes = np.array(np.clip(samples, -1.0, 1.0) * 32767, dtype=np.int16).tobytes()
+                chunks.append(pcm)
+            return chunks
 
-        generator = self.pipeline(
-            text, voice=self.config.voice,
-            speed=1, split_pattern=r'\n+'
-        )
-        self._logger.info("TTS (stub): %s", text)
+        return await asyncio.to_thread(_run_kokoro)
+
+
+        

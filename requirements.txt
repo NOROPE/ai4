@@ -1,8 +1,7 @@
 sounddevice
-google-genai
-python-dotenv
-docker
 numpy
-scipy
 faster-whisper
 openai
+kokoro
+opencv-python
+websockets

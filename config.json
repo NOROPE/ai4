@@ -9,5 +9,7 @@
     "receive_sample_rate": 24000,
     "chunk_size": 1024,
     "prevmsg_count": 30,
-    "teardown_sinks_on_exit": false
+    "teardown_sinks_on_exit": false,
+    "pipewire_sink_output": "pulse",
+    "pipewire_sink_input": "pulse"
 }
