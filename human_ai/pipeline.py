@@ -125,6 +125,12 @@ class Pipeline:
                     self.llm.interrupt()
                     if self._active_turn_task and not self._active_turn_task.done():
                         self._active_turn_task.cancel()
+                        try:
+                            await self._active_turn_task
+                        except (asyncio.CancelledError, Exception):
+                            pass
+                    # Remove any dangling user message the LLM already added to history.
+                    self.llm.rollback_user_turn()
                     # Drain the audio queue, then signal the player to abort.
                     while not self._audio_out_queue.empty():
                         try:

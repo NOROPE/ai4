@@ -20,6 +20,7 @@ ASR: faster-whisper.
 from __future__ import annotations
 
 import asyncio
+import collections
 import logging
 import struct
 import time
@@ -37,6 +38,7 @@ INTERRUPT = object()
 _DEFAULT_VOLUME_THRESHOLD = 2000       # RMS of int16 samples (0–32768)
 _DEFAULT_SILENCE_DURATION = 0.8       # seconds of quiet to end an utterance
 _DEFAULT_MIN_SPEECH_DURATION = 0.3    # seconds; shorter clips are discarded
+_DEFAULT_VAD_WINDOW = 0.5             # rolling average window for onset detection (seconds)
 _DEFAULT_MODEL = "base"               # faster-whisper model name
 _DEFAULT_DEVICE = "cpu"
 _DEFAULT_COMPUTE_TYPE = "int8"
@@ -71,6 +73,7 @@ class STT:
         self._volume_threshold: float = float(raw.get("stt_volume_threshold", _DEFAULT_VOLUME_THRESHOLD))
         self._silence_duration: float = float(raw.get("stt_silence_duration", _DEFAULT_SILENCE_DURATION))
         self._min_speech_duration: float = float(raw.get("stt_min_speech_duration", _DEFAULT_MIN_SPEECH_DURATION))
+        self._vad_window: float = float(raw.get("stt_vad_window", _DEFAULT_VAD_WINDOW))
         self._post_utterance_cooldown: float = float(raw.get("stt_post_utterance_cooldown", 0.6))
         self._model_name: str = str(raw.get("stt_model", _DEFAULT_MODEL))
         self._device: str = str(raw.get("stt_device", _DEFAULT_DEVICE))
@@ -105,12 +108,14 @@ class STT:
         last_utterance_time: float = 0.0
         interrupt_sent = False
         _last_level_log: float = 0.0
-        _peak_rms: float = 0.0
 
         self._logger.info(
-            "STT ready — threshold=%.0f, silence=%.2fs, model=%s",
-            self._volume_threshold, self._silence_duration, self._model_name,
+            "STT ready — threshold=%.0f, vad_window=%.2fs, silence=%.2fs, model=%s",
+            self._volume_threshold, self._vad_window, self._silence_duration, self._model_name,
         )
+
+        # Rolling window of (timestamp, rms) for averaged onset detection.
+        _rms_window: collections.deque[tuple[float, float]] = collections.deque()
 
         try:
             while True:
@@ -118,27 +123,25 @@ class STT:
                 rms = _rms(chunk)
                 now = time.monotonic()
 
-                # Log peak RMS every 3 s so you can verify audio is arriving.
-                _peak_rms = max(_peak_rms, rms)
-                if now - _last_level_log >= 3.0:
-                    self._logger.debug(
-                        "Mic level (peak/3 s): %.0f  (threshold: %.0f)",
-                        _peak_rms, self._volume_threshold,
-                    )
-                    _peak_rms = 0.0
-                    _last_level_log = now
+                # Maintain rolling window and compute average RMS over the last vad_window seconds.
+                _rms_window.append((now, rms))
+                cutoff = now - self._vad_window
+                while _rms_window and _rms_window[0][0] < cutoff:
+                    _rms_window.popleft()
+                avg_rms = sum(v for _, v in _rms_window) / len(_rms_window)
+
 
                 # Ignore mic input briefly after an utterance is sent so trailing
                 # audio / mic ring-off doesn't immediately trigger an interrupt.
                 in_cooldown = (now - last_utterance_time) < self._post_utterance_cooldown
 
-                if rms >= self._volume_threshold and not in_cooldown:
+                if avg_rms >= self._volume_threshold and not in_cooldown:
                     # ---- speech frame ----
                     if not in_speech:
                         # Rising edge: speech just started
                         in_speech = True
                         interrupt_sent = False
-                        self._logger.debug("Speech start (rms=%.0f)", rms)
+                        self._logger.debug("Speech start (avg_rms=%.0f)", avg_rms)
 
                     if in_speech and not interrupt_sent and llm_generating and llm_generating.is_set():
                         # Interrupt any active LLM/TTS response

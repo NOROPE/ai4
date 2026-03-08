@@ -395,7 +395,7 @@ class Live2DMixin(ToolMixin):
     # tool functions
 
     @tool_function(
-        description="Get the current status of the Live2D model, including its position, rotation, and size.",
+        description="Get the current position, rotation, size, and name of the Live2D model.",
         parameter_descriptions={},
     )
     async def get_model_status(self) -> str:
@@ -418,162 +418,47 @@ class Live2DMixin(ToolMixin):
         return f"Model: {name} | position: ({x}, {y}) | rotation: {rotation}° | size: {size}"
 
     @tool_function(
-        description="Make the Live2D model's eyes follow the mouse cursor position.",
-        parameter_descriptions={},
-    )
-    @fire_and_forget
-    async def focus_eyes_on_mouse(self) -> str:
-        if self._mouse_task and not self._mouse_task.done():
-            # Loop already running — just re-enable injection
-            self._mouse_tracking_active = True
-        else:
-            # Start fresh
-            self._mouse_tracking_active = True
-            self._mouse_task = asyncio.create_task(self._mouse_tracking_loop())
-        return "Eyes are now following the mouse cursor."
-
-    @tool_function(
-        description="Stop the Live2D model's eyes from following the mouse cursor.",
-        parameter_descriptions={},
-    )
-    @fire_and_forget
-    async def unfocus_eyes_from_mouse(self) -> str:
-        self._mouse_tracking_active = False
-        return "Eyes are no longer following the mouse cursor."
-
-    @tool_function(
-        description="Move the Live2D model to a specific (x, y) position on screen.",
+        description=(
+            "Move, rotate, and/or resize the avatar by relative offsets from its current pose. "
+            "Pass only the values you want to change; leave others at 0. "
+            "Use this to spin, slide, bounce, or resize the avatar as an emote."
+        ),
         parameter_descriptions={
-            "x": "Horizontal position (-1000 to 1000, screen edges at -1/1, 0 is center)",
-            "y": "Vertical position (-1000 to 1000, screen edges at -1/1, 0 is center)",
-            "time_in_seconds": "Duration of the movement animation in seconds (0 to 2)",
+            "dx": "Horizontal offset (-1 to 1, positive = right)",
+            "dy": "Vertical offset (-1 to 1, positive = up)",
+            "drotation": "Rotation offset in degrees (positive = clockwise)",
+            "dsize": "Size offset (-100 to 100, positive = bigger)",
+            "time_in_seconds": "Animation duration in seconds (0 to 2)",
         },
-        behavior="NON_BLOCKING",
     )
     @fire_and_forget
-    async def set_model_position(self, x: float, y: float, time_in_seconds: float = 0.5) -> str:
+    async def move_model(
+        self,
+        dx: float = 0.0,
+        dy: float = 0.0,
+        drotation: float = 0.0,
+        dsize: float = 0.0,
+        time_in_seconds: float = 0.5,
+    ) -> str:
         if not self.websocket_connection:
             return "Error: Not connected to VTube Studio."
         try:
             request = self.create_request(
                 message_type="MoveModelRequest",
-                data={"timeInSeconds": time_in_seconds, "valuesAreRelativeToModel": False, "positionX": x, "positionY": y, "behavior": "NON_BLOCKING"}
+                data={
+                    "timeInSeconds": time_in_seconds,
+                    "valuesAreRelativeToModel": True,
+                    "positionX": dx,
+                    "positionY": dy,
+                    "rotation": drotation,
+                    "size": dsize,
+                    "behavior": "NON_BLOCKING",
+                },
             )
             await self._send_recv(request)
         except ConnectionError as e:
             return f"Error: {e}"
-        return f"Moved model to position ({x}, {y})."
-
-    @tool_function(
-        description="Rotate the Live2D model to a specific angle in degrees.",
-        parameter_descriptions={
-            "rotation": "Rotation angle in degrees (-360 to 360, positive = clockwise)",
-            "time_in_seconds": "Duration of the rotation animation in seconds (0 to 2)",
-        },
-        behavior="NON_BLOCKING",
-    )
-    @fire_and_forget
-    async def set_model_rotation(self, rotation: float, time_in_seconds: float = 0.5) -> str:
-        if not self.websocket_connection:
-            return "Error: Not connected to VTube Studio."
-        try:
-            request = self.create_request(
-                message_type="MoveModelRequest",
-                data={"timeInSeconds": time_in_seconds, "valuesAreRelativeToModel": False, "rotation": rotation, "behavior": "NON_BLOCKING"}
-            )
-            await self._send_recv(request)
-        except ConnectionError as e:
-            return f"Error: {e}"
-        return f"Rotated model to {rotation} degrees."
-
-    @tool_function(
-        description="Resize the Live2D model.",
-        parameter_descriptions={
-            "size": "Model size (-100 to 100, -100 is smallest, 100 is biggest)",
-            "time_in_seconds": "Duration of the resize animation in seconds (0 to 2)",
-        },
-        behavior="NON_BLOCKING",
-    )
-    @fire_and_forget
-    async def set_model_size(self, size: float, time_in_seconds: float = 0.5) -> str:
-        if not self.websocket_connection:
-            return "Error: Not connected to VTube Studio."
-        try:
-            request = self.create_request(
-                message_type="MoveModelRequest",
-                data={"timeInSeconds": time_in_seconds, "valuesAreRelativeToModel": False, "size": size, "behavior": "NON_BLOCKING"}
-            )
-            await self._send_recv(request)
-        except ConnectionError as e:
-            return f"Error: {e}"
-        return f"Resized model to {size}."
-
-    @tool_function(
-        description="Move the Live2D model by a relative offset from its current position.",
-        parameter_descriptions={
-            "dx": "Horizontal offset to add to current position (screen width is ~2 units)",
-            "dy": "Vertical offset to add to current position (screen height is ~2 units)",
-            "time_in_seconds": "Duration of the movement animation in seconds (0 to 2)",
-        },
-        behavior="NON_BLOCKING",
-    )
-    @fire_and_forget
-    async def move_model_relative(self, dx: float, dy: float, time_in_seconds: float = 0.5) -> str:
-        if not self.websocket_connection:
-            return "Error: Not connected to VTube Studio."
-        try:
-            request = self.create_request(
-                message_type="MoveModelRequest",
-                data={"timeInSeconds": time_in_seconds, "valuesAreRelativeToModel": True, "positionX": dx, "positionY": dy, "rotation": 0.0, "size": 0.0, "behavior": "NON_BLOCKING"}
-            )
-            await self._send_recv(request)
-        except ConnectionError as e:
-            return f"Error: {e}"
-        return f"Moved model by offset ({dx}, {dy})."
-
-    @tool_function(
-        description="Rotate the Live2D model by a relative angle offset from its current rotation.",
-        parameter_descriptions={
-            "rotation": "Rotation offset in degrees to add to current rotation (positive = clockwise)",
-            "time_in_seconds": "Duration of the rotation animation in seconds (0 to 2)",
-        },
-        behavior="NON_BLOCKING",
-    )
-    @fire_and_forget
-    async def rotate_model_relative(self, rotation: float, time_in_seconds: float = 0.5) -> str:
-        if not self.websocket_connection:
-            return "Error: Not connected to VTube Studio."
-        try:
-            request = self.create_request(
-                message_type="MoveModelRequest",
-                data={"timeInSeconds": time_in_seconds, "valuesAreRelativeToModel": True, "positionX": 0.0, "positionY": 0.0, "rotation": rotation, "size": 0.0, "behavior": "NON_BLOCKING"}
-            )
-            await self._send_recv(request)
-        except ConnectionError as e:
-            return f"Error: {e}"
-        return f"Rotated model by {rotation} degrees."
-
-    @tool_function(
-        description="Resize the Live2D model by a relative size offset from its current size.",
-        parameter_descriptions={
-            "size": "Size offset to add to current model size (-100 to 100 scale)",
-            "time_in_seconds": "Duration of the resize animation in seconds (0 to 2)",
-        },
-        behavior="NON_BLOCKING",
-    )
-    @fire_and_forget
-    async def resize_model_relative(self, size: float, time_in_seconds: float = 0.5) -> str:
-        if not self.websocket_connection:
-            return "Error: Not connected to VTube Studio."
-        try:
-            request = self.create_request(
-                message_type="MoveModelRequest",
-                data={"timeInSeconds": time_in_seconds, "valuesAreRelativeToModel": True, "positionX": 0.0, "positionY": 0.0, "rotation": 0.0, "size": size, "behavior": "NON_BLOCKING"}
-            )
-            await self._send_recv(request)
-        except ConnectionError as e:
-            return f"Error: {e}"
-        return f"Resized model by offset {size}."
+        return f"Model adjusted (dx={dx}, dy={dy}, drotation={drotation}, dsize={dsize})."
 
     @tool_function(
         description="List all available expressions for the current Live2D model.",
@@ -596,20 +481,30 @@ class Live2DMixin(ToolMixin):
         return "Expressions:\n" + "\n".join(lines)
 
     @tool_function(
-        description="Activate a named expression on the Live2D model, then automatically deactivate it after a timeout.",
+        description=(
+            "Activate or deactivate a facial expression on the avatar. "
+            "Use list_expressions to see available names. "
+            "When activating, the expression auto-deactivates after `timeout` seconds."
+        ),
         parameter_descriptions={
-            "expression_file": "The filename of the expression to activate (use list_expressions to see available names, e.g. 'happy.exp3.json')",
-            "timeout": "How many seconds to hold the expression before auto-deactivating it (default: 20)",
+            "expression_file": "Expression filename, e.g. 'happy.exp3.json'",
+            "active": "True to activate, False to deactivate",
+            "timeout": "Seconds before auto-deactivating (only used when active=True, default 20)",
         },
     )
     @fire_and_forget
-    async def activate_expression(self, expression_file: str, timeout: float = 20.0) -> str:
+    async def set_expression(
+        self,
+        expression_file: str,
+        active: bool = True,
+        timeout: float = 20.0,
+    ) -> str:
         if not self.websocket_connection:
             return "Error: Not connected to VTube Studio."
         try:
             request = self.create_request(
                 message_type="ExpressionActivationRequest",
-                data={"expressionFile": expression_file, "active": True}
+                data={"expressionFile": expression_file, "active": active},
             )
             response = await self._send_recv(request)
         except ConnectionError as e:
@@ -617,43 +512,61 @@ class Live2DMixin(ToolMixin):
         if response.get("messageType") == "APIError":
             return f"Error: {response.get('data', {}).get('message', 'Unknown error')}"
 
-        async def _auto_deactivate():
-            await asyncio.sleep(timeout)
-            try:
-                deactivate_request = self.create_request(
-                    message_type="ExpressionActivationRequest",
-                    data={"expressionFile": expression_file, "active": False}
-                )
-                await self._send_recv(deactivate_request)
-                self.logger.info(f"Auto-deactivated expression '{expression_file}' after {timeout}s.")
-            except Exception as e:
-                self.logger.warning(f"Failed to auto-deactivate expression '{expression_file}': {e}")
+        if active and timeout > 0:
+            async def _auto_deactivate() -> None:
+                await asyncio.sleep(timeout)
+                try:
+                    req = self.create_request(
+                        message_type="ExpressionActivationRequest",
+                        data={"expressionFile": expression_file, "active": False},
+                    )
+                    await self._send_recv(req)
+                    self.logger.info("Auto-deactivated expression '%s'.", expression_file)
+                except Exception as exc:
+                    self.logger.warning("Failed to auto-deactivate '%s': %s", expression_file, exc)
+            asyncio.create_task(_auto_deactivate())
 
-        asyncio.create_task(_auto_deactivate())
-        return f"Expression '{expression_file}' activated (will auto-deactivate after {timeout}s)."
+        state = "activated" if active else "deactivated"
+        return f"Expression '{expression_file}' {state}."
 
     @tool_function(
-        description="Deactivate a named expression on the Live2D model.",
-        parameter_descriptions={
-            "expression_file": "The filename of the expression to deactivate (e.g. 'happy.exp3.json')",
-        },
+        description=(
+            "Enable or disable the avatar's eyes following the mouse cursor. "
+            "Call with enabled=True to start tracking, enabled=False to stop."
+        ),
+        parameter_descriptions={"enabled": "True to follow mouse, False to stop"},
     )
     @fire_and_forget
-    async def deactivate_expression(self, expression_file: str) -> str:
+    async def set_eye_tracking(self, enabled: bool = True) -> str:
+        if enabled:
+            if self._mouse_task and not self._mouse_task.done():
+                self._mouse_tracking_active = True
+            else:
+                self._mouse_tracking_active = True
+                self._mouse_task = asyncio.create_task(self._mouse_tracking_loop())
+            return "Eye tracking enabled."
+        else:
+            self._mouse_tracking_active = False
+            return "Eye tracking disabled."
+
         if not self.websocket_connection:
             return "Error: Not connected to VTube Studio."
         try:
-            request = self.create_request(
-                message_type="ExpressionActivationRequest",
-                data={"expressionFile": expression_file, "active": False}
-            )
+            request = self.create_request(message_type="CurrentModelRequest")
             response = await self._send_recv(request)
         except ConnectionError as e:
             return f"Error: {e}"
         if response.get("messageType") == "APIError":
             return f"Error: {response.get('data', {}).get('message', 'Unknown error')}"
-        return f"Expression '{expression_file}' deactivated."
-    
+        data = response.get("data", {})
+        pos = data.get("modelPosition", {})
+        x        = pos.get("positionX", "N/A")
+        y        = pos.get("positionY", "N/A")
+        rotation = pos.get("rotation",  "N/A")
+        size     = pos.get("size",      "N/A")
+        name     = data.get("modelName", "unknown")
+        return f"Model: {name} | position: ({x}, {y}) | rotation: {rotation}° | size: {size}"
+
 
 
 

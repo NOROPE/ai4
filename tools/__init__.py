@@ -32,6 +32,7 @@ MIXIN_REGISTRY: dict[str, str] = {
     "system_info": "tools.mixins.system_info",
     "live2d": "tools.mixins.live2d_mixin",
     "chess": "tools.mixins.chess_mixin",
+    "memories": "tools.mixins.memories_mixin",
 }
 
 

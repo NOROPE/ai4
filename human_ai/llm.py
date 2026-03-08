@@ -142,6 +142,16 @@ class LLM:
             logger.info("LLM stream interrupted.")
         self._pending_content = None
 
+    def rollback_user_turn(self) -> None:
+        """Remove the last user message from history if no assistant reply was committed.
+
+        Call this after cancelling a turn so the next user message doesn't produce
+        two consecutive user messages, which breaks model chat templates.
+        """
+        if self._history and self._history[-1].get("role") == "user":
+            self._history.pop()
+            logger.debug("Rolled back dangling user message from history.")
+
     # ------------------------------------------------------------------
     # Core generation
     # ------------------------------------------------------------------
@@ -319,6 +329,11 @@ class LLM:
             if remaining:
                 await work_queue.put(TextChunk(remaining))
 
+            logger.debug(
+                "LLM stream done — finish_reason=%r, tool_calls=%d, content_len=%d",
+                finish_reason, len(tool_calls_acc), len(accumulated_content),
+            )
+
             # Build the assistant message for history.
             ai_msg: dict[str, Any] = {
                 "role": "assistant",
@@ -468,6 +483,8 @@ class LLM:
                 model=self.config.model,
                 messages=messages,  # type: ignore[arg-type]
                 tools=tool_config,  # type: ignore[arg-type]
+                tool_choice="auto" if tool_config is not NOT_GIVEN else NOT_GIVEN,
+                parallel_tool_calls=False if tool_config is not NOT_GIVEN else NOT_GIVEN,
                 stream=True,
             )
 
