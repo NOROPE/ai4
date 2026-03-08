@@ -217,7 +217,8 @@ class Pipeline:
             item = await work_queue.get()
 
             if isinstance(item, TextChunk):
-                if item.text.strip():
+                speakable = item.text.strip().strip(".…·").strip()
+                if speakable:
                     await self._speak_and_wait(item.text)
 
             elif isinstance(item, ToolCallPending):

@@ -141,6 +141,13 @@ class Tools:
         """True if at least one tool function is registered."""
         return bool(self._declarations)
 
+    def get_mixin(self, name: str) -> ToolMixin | None:
+        """Return the mixin instance with the given MIXIN_NAME, or None."""
+        for mixin in self._mixins:
+            if mixin.MIXIN_NAME == name:
+                return mixin
+        return None
+
     # -- dispatch ------------------------------------------------------------
 
     async def handle_call(self, function_name: str, args: dict[str, Any]) -> str:

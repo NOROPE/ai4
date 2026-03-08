@@ -3,10 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from openai import AsyncOpenAI
+from openai import APIError, AsyncOpenAI
 from openai._types import NOT_GIVEN
 
 from config_loader import ProfileConfig
@@ -25,6 +26,9 @@ SILENT_MARKER = "[STAY]"
 
 # Characters that end a speakable sentence chunk.
 _SENTENCE_BOUNDARIES = frozenset(".!?\n")
+
+# Regex to strip complete <think>…</think> blocks (for post-hoc cleanup in history).
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 # ---------------------------------------------------------------------------
 # Work-queue item types  (used by stream_work / pipeline work processor)
@@ -119,6 +123,19 @@ class LLM:
             )
         except OSError as exc:
             logger.warning("Could not save history to %s: %s", self._history_path, exc)
+
+    def _build_system_content(self) -> str:
+        """Return the system instruction, prepending any important memories."""
+        base = self.config.system_instruction
+        if self.tools:
+            mem_mixin = self.tools.get_mixin("memories")
+            if mem_mixin is not None:
+                getter = getattr(mem_mixin, "get_important_memories_text", None)
+                if callable(getter):
+                    important_text = str(getter())
+                if important_text:
+                    return important_text + "\n\n" + base
+        return base
 
     async def setup(self) -> None:
         """Initialise tools (if any). Call before the first generate()."""
@@ -242,7 +259,7 @@ class LLM:
         system_msg: dict[str, Any] = {
             "role": "system",
             "name": self.config.name,
-            "content": self.config.system_instruction,
+            "content": self._build_system_content(),
         }
         messages: list[dict[str, Any]] = [system_msg] + list(self._history)
 
@@ -253,6 +270,25 @@ class LLM:
             if self._history and self._history[-1].get("role") == "user":
                 self._history.pop()
             raise
+        except APIError as exc:
+            if "context" in str(exc).lower():
+                # Drop the oldest half of history and retry once.
+                self._history = self._history[len(self._history) // 2:]
+                while self._history and self._history[0].get("role") != "user":
+                    self._history.pop(0)
+                logger.warning(
+                    "Context size exceeded — trimmed history to %d messages, retrying.",
+                    len(self._history),
+                )
+                messages = [system_msg] + list(self._history)
+                try:
+                    await self._stream_work_loop(messages, work_queue)
+                except Exception as retry_exc:
+                    logger.error("LLM stream_work retry error: %s", retry_exc, exc_info=True)
+                    work_queue.put_nowait(TurnError(retry_exc))
+            else:
+                logger.error("LLM stream_work API error: %s", exc, exc_info=True)
+                work_queue.put_nowait(TurnError(exc))
         except Exception as exc:
             logger.error("LLM stream_work error: %s", exc, exc_info=True)
             work_queue.put_nowait(TurnError(exc))
@@ -276,17 +312,24 @@ class LLM:
                 else NOT_GIVEN
             )
 
+            extra_kwargs: dict[str, Any] = {}
+            if tool_config is not NOT_GIVEN:
+                extra_kwargs["tool_choice"] = "auto"
+                extra_kwargs["parallel_tool_calls"] = False
+
             stream = await self.client.chat.completions.create(
                 model=self.config.model,
                 messages=messages,  # type: ignore[arg-type]
                 tools=tool_config,  # type: ignore[arg-type]
                 stream=True,
+                **extra_kwargs,
             )
 
             accumulated_content = ""
             text_buf = ""
             tool_calls_acc: dict[int, dict[str, Any]] = {}
             finish_reason: str | None = None
+            _in_think = False  # True while inside a <think>…</think> block
 
             async for chunk in stream:
                 choice = chunk.choices[0]
@@ -297,7 +340,34 @@ class LLM:
                 # --- text tokens: split into sentences on the fly ---
                 if delta.content:
                     accumulated_content += delta.content
-                    for ch in delta.content:
+
+                    # Filter out <think>…</think> reasoning blocks so they are
+                    # never spoken aloud.  Tags may span multiple chunks.
+                    chunk_text = delta.content
+                    filtered_text = ""
+                    while chunk_text:
+                        if not _in_think:
+                            think_open = chunk_text.find("<think>")
+                            think_close = chunk_text.find("</think>")
+                            # Stray </think> before any <think>: skip it.
+                            if think_close != -1 and (think_open == -1 or think_close < think_open):
+                                filtered_text += chunk_text[:think_close]
+                                chunk_text = chunk_text[think_close + 8:]  # skip "</think>"
+                                continue
+                            if think_open == -1:
+                                filtered_text += chunk_text
+                                break
+                            filtered_text += chunk_text[:think_open]
+                            chunk_text = chunk_text[think_open + 7:]  # skip "<think>"
+                            _in_think = True
+                        else:
+                            idx = chunk_text.find("</think>")
+                            if idx == -1:
+                                break  # rest of chunk is think content — discard
+                            chunk_text = chunk_text[idx + 8:]  # skip "</think>"
+                            _in_think = False
+
+                    for ch in filtered_text:
                         text_buf += ch
                         if ch in _SENTENCE_BOUNDARIES and text_buf.strip():
                             sentence = text_buf.strip().replace(SILENT_MARKER, "").strip()
@@ -333,6 +403,10 @@ class LLM:
                 "LLM stream done — finish_reason=%r, tool_calls=%d, content_len=%d",
                 finish_reason, len(tool_calls_acc), len(accumulated_content),
             )
+
+            # Strip any <think>…</think> blocks from accumulated content before
+            # saving to history or checking for SILENT_MARKER.
+            accumulated_content = _THINK_RE.sub("", accumulated_content).strip()
 
             # Build the assistant message for history.
             ai_msg: dict[str, Any] = {
@@ -408,7 +482,7 @@ class LLM:
         system_msg: dict[str, Any] = {
             "role": "system",
             "name": self.config.name,
-            "content": self.config.system_instruction,
+            "content": self._build_system_content(),
         }
         messages: list[dict[str, Any]] = [system_msg] + list(self._history)
 
@@ -440,7 +514,7 @@ class LLM:
         system_msg: dict[str, Any] = {
             "role": "system",
             "name": self.config.name,
-            "content": self.config.system_instruction,
+            "content": self._build_system_content(),
         }
 
         # Add the nudge to history first (mirrors what _generate does for user
@@ -479,13 +553,17 @@ class LLM:
                 else NOT_GIVEN
             )
 
+            extra_kwargs: dict[str, Any] = {}
+            if tool_config is not NOT_GIVEN:
+                extra_kwargs["tool_choice"] = "auto"
+                extra_kwargs["parallel_tool_calls"] = False
+
             stream = await self.client.chat.completions.create(
                 model=self.config.model,
                 messages=messages,  # type: ignore[arg-type]
                 tools=tool_config,  # type: ignore[arg-type]
-                tool_choice="auto" if tool_config is not NOT_GIVEN else NOT_GIVEN,
-                parallel_tool_calls=False if tool_config is not NOT_GIVEN else NOT_GIVEN,
                 stream=True,
+                **extra_kwargs,
             )
 
             accumulated_content = ""

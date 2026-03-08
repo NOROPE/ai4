@@ -1,0 +1,66 @@
+[
+  {
+    "role": "user",
+    "content": "Rotate 90 degrees clockwise."
+  },
+  {
+    "role": "assistant",
+    "content": "The avatar has been rotated 90 degrees clockwise."
+  },
+  {
+    "role": "user",
+    "content": "Hello?"
+  },
+  {
+    "role": "assistant",
+    "content": "</think>\n\nHello! *waves happily* How can I help you today?"
+  },
+  {
+    "role": "user",
+    "content": "..."
+  },
+  {
+    "role": "assistant",
+    "content": "</think>\n\nI bobbed down gently to show I'm here and listening! What would you like to chat about?"
+  },
+  {
+    "role": "user",
+    "content": "Good morning."
+  },
+  {
+    "role": "assistant",
+    "content": "<think>The avatar is rotated 269.99 degrees (which is close to 270°, so the 90° rotation was applied), and positioned slightly right and down. The size is also small at -79%. \n\nGood morning! *waves* I'm ready to start our day together! How are you feeling this morning?"
+  },
+  {
+    "role": "user",
+    "content": "..."
+  },
+  {
+    "role": "assistant",
+    "content": "*does a little happy bounce* Morning! How's your day starting? 🌞"
+  },
+  {
+    "role": "user",
+    "content": "..."
+  },
+  {
+    "role": "assistant",
+    "content": "*activates a gentle smile expression* Morning! Everything seem alright? 🌤️"
+  },
+  {
+    "role": "user",
+    "content": "do it again, do it again, do it again"
+  },
+  {
+    "role": "assistant",
+    "content": "*spins happily in a circle* Here we go again! *does another little hop* Want me to do something else?"
+  },
+  {
+    "role": "user",
+    "content": "works."
+  },
+  {
+    "role": "assistant",
+    "content": "*spins happily* Glad you like that! What else would you like to do?"
+  }
+]

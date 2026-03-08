@@ -531,6 +531,82 @@ class Live2DMixin(ToolMixin):
 
     @tool_function(
         description=(
+            "List all Live2D parameters available on the current model, "
+            "including their current value, min, max, and default. "
+            "Use this to discover what parameters you can control with set_live2d_parameter."
+        ),
+    )
+    async def list_live2d_parameters(self) -> str:
+        if not self.websocket_connection:
+            return "Error: Not connected to VTube Studio."
+        try:
+            request = self.create_request(message_type="Live2DParameterListRequest")
+            response = await self._send_recv(request)
+        except ConnectionError as e:
+            return f"Error: {e}"
+        if response.get("messageType") == "APIError":
+            return f"Error: {response.get('data', {}).get('message', 'Unknown error')}"
+        params = response.get("data", {}).get("parameters", [])
+        if not params:
+            return "No parameters found."
+        lines = []
+        for p in params:
+            name = p.get("name", "?")
+            val  = p.get("value", "?")
+            mn   = p.get("min", "?")
+            mx   = p.get("max", "?")
+            df   = p.get("defaultValue", "?")
+            lines.append(f"{name}: value={val} (min={mn}, max={mx}, default={df})")
+        return "\n".join(lines)
+
+    @tool_function(
+        description=(
+            "Set one or more Live2D parameter values on the current model. "
+            "Use list_live2d_parameters to discover available parameter names. "
+            "Values are injected for face_found_seconds seconds before reverting to default. "
+            "Pass face_found=False to release control of a parameter."
+        ),
+        parameter_descriptions={
+            "parameter_name": "Name of the Live2D parameter to set (e.g. 'ParamMouthOpenY')",
+            "value": "Target value to inject",
+            "weight": "Blend weight 0.0–1.0 (1.0 = fully override, default 1.0)",
+            "face_found": "True to hold the injected value, False to release (default True)",
+        },
+    )
+    @fire_and_forget
+    async def set_live2d_parameter(
+        self,
+        parameter_name: str,
+        value: float,
+        weight: float = 1.0,
+        face_found: bool = True,
+    ) -> str:
+        if not self.websocket_connection:
+            return "Error: Not connected to VTube Studio."
+        try:
+            request = self.create_request(
+                message_type="InjectParameterDataRequest",
+                data={
+                    "faceFound": face_found,
+                    "mode": "set",
+                    "parameterValues": [
+                        {
+                            "id": parameter_name,
+                            "value": value,
+                            "weight": weight,
+                        }
+                    ],
+                },
+            )
+            response = await self._send_recv(request)
+        except ConnectionError as e:
+            return f"Error: {e}"
+        if response.get("messageType") == "APIError":
+            return f"Error: {response.get('data', {}).get('message', 'Unknown error')}"
+        return f"Parameter '{parameter_name}' set to {value} (weight={weight})."
+
+    @tool_function(
+        description=(
             "Enable or disable the avatar's eyes following the mouse cursor. "
             "Call with enabled=True to start tracking, enabled=False to stop."
         ),

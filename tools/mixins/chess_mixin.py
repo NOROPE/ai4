@@ -70,6 +70,98 @@ class ChessMixin(ToolMixin):
         self._piece_templates: dict[str, np.ndarray] = {}
         self._piece_masks: dict[str, np.ndarray | None] = {}
         self._load_piece_templates()
+        # Move history tracking
+        self._last_grid: list[list[str | None]] | None = None
+        self._last_player: str | None = None
+        self._move_history: list[str] = []   # e.g. ["1. e2-e4", "1... e7-e5", ...]
+        self._move_number: int = 1
+
+    # ------------------------------------------------------------------
+    # Move detection helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _sq_name(row: int, col: int) -> str:
+        """Convert (row, col) in the normalised grid to algebraic notation."""
+        return _FILES[col] + str(8 - row)
+
+    def _detect_move(
+        self,
+        old: list[list[str | None]],
+        new: list[list[str | None]],
+        moving_colour: str,  # "w" or "b"
+    ) -> str | None:
+        """
+        Compare two normalised 8×8 grids and return a human-readable move string,
+        e.g. ``"Nb1-c3"`` or ``"e2-e4"`` or ``"O-O"``.
+        Returns None if no single move can be detected.
+        """
+        removed: list[tuple[int, int, str]] = []   # (row, col, piece_code)
+        appeared: list[tuple[int, int, str]] = []  # (row, col, piece_code)
+
+        for r in range(8):
+            for c in range(8):
+                o, n = old[r][c], new[r][c]
+                if o == n:
+                    continue
+                if o and not n:
+                    removed.append((r, c, o))
+                elif not o and n:
+                    appeared.append((r, c, n))
+                elif o and n and o != n:
+                    # Square changed occupant (capture in place or promotion)
+                    removed.append((r, c, o))
+                    appeared.append((r, c, n))
+
+        if not removed or not appeared:
+            return None
+
+        # --- Castling detection: king + rook both moved ---
+        moving_pieces = [p for _, _, p in removed if p[0] == moving_colour]
+        if len(moving_pieces) == 2 and any(p[1] == "k" for p in moving_pieces):
+            king_dest = next((c for r, c, p in appeared if p[0] == moving_colour and p[1] == "k"), None)
+            if king_dest is not None:
+                return "O-O" if king_dest == 6 else "O-O-O"
+
+        # --- Normal move: identify the piece that moved ---
+        # The moving piece is the one that disappeared from a square of the moving colour
+        from_entries = [(r, c, p) for r, c, p in removed if p[0] == moving_colour]
+        if not from_entries:
+            return None
+        fr, fc, piece_code = from_entries[0]
+        from_sq = self._sq_name(fr, fc)
+
+        # Destination: where the same colour piece appeared (could be promoted)
+        to_entries = [(r, c, p) for r, c, p in appeared if p[0] == moving_colour]
+        if not to_entries:
+            return None
+        tr, tc, dest_code = to_entries[0]
+        to_sq = self._sq_name(tr, tc)
+
+        # Was there a capture? (enemy piece disappeared or square was occupied)
+        capture_sq = to_sq
+        was_capture = (old[tr][tc] is not None) and (old[tr][tc][0] != moving_colour)  # type: ignore[index]
+        # En passant: pawn moved diagonally to empty square — captured pawn removed elsewhere
+        if not was_capture and piece_code[1] == "p" and fc != tc:
+            was_capture = True
+
+        piece_type = piece_code[1]  # 'p','n','b','r','q','k'
+        piece_letter = {"n": "N", "b": "B", "r": "R", "q": "Q", "k": "K"}.get(piece_type, "")
+
+        # Format
+        if piece_type == "p":
+            if was_capture:
+                notation = f"{_FILES[fc]}x{to_sq}"
+            else:
+                notation = f"{from_sq}-{to_sq}"
+            # Promotion
+            if dest_code[1] != "p":
+                notation += f"={dest_code[1].upper()}"
+        else:
+            sep = "x" if was_capture else "-"
+            notation = f"{piece_letter}{from_sq}{sep}{to_sq}"
+
+        return notation
 
     # ------------------------------------------------------------------
     # Template loading
@@ -448,12 +540,12 @@ class ChessMixin(ToolMixin):
     @tool_function(
         description=(
             "Take a screenshot, detect the chess board, identify all pieces, "
-            "and return the current position as a FEN string together with "
-            "the detected player colour."
+            "and return the current position as a FEN string, a board diagram, "
+            "and the move history in algebraic notation."
         ),
     )
     async def read_chess_board(self) -> str:
-        """Screenshot → detect board → identify pieces → return FEN."""
+        """Screenshot → detect board → identify pieces → return FEN + move history."""
         img = await asyncio.to_thread(self._screenshot_bgr)
         board = self._detect_board(img)
         if board is None:
@@ -462,17 +554,32 @@ class ChessMixin(ToolMixin):
         grid = self._identify_pieces(img, board)
         player = self._detect_player_colour(grid)
 
-        # Normalise grid so grid[0] = rank 8 (standard FEN order).
-        # When playing as black the screen is rotated (rank 1 at top),
-        # so flip 180°.
+        # Normalise grid so grid[0] = rank 8 (standard FEN order, white at bottom).
         if player == "black":
-            grid = [row[::-1] for row in grid[::-1]]
+            norm_grid = [row[::-1] for row in grid[::-1]]
+        else:
+            norm_grid = [row[:] for row in grid]
 
-        fen = self._grid_to_fen(grid, player)
+        # --- Detect move since last call ---
+        if self._last_grid is not None:
+            moving_colour = "w" if player == "white" else "b"
+            # Flip perspective so grids are comparable (both white-at-bottom)
+            move_str = self._detect_move(self._last_grid, norm_grid, moving_colour)
+            if move_str:
+                if moving_colour == "w":
+                    self._move_history.append(f"{self._move_number}. {move_str}")
+                else:
+                    self._move_history.append(f"{self._move_number}... {move_str}")
+                    self._move_number += 1
 
-        # Build a readable board diagram (. = empty square)
+        self._last_grid = norm_grid
+        self._last_player = player
+
+        fen = self._grid_to_fen(norm_grid, player)
+
+        # Board diagram
         diagram_lines: list[str] = []
-        for rank_idx, rank_row in enumerate(grid):
+        for rank_idx, rank_row in enumerate(norm_grid):
             rank_num = 8 - rank_idx
             cells = []
             for cell in rank_row:
@@ -484,14 +591,35 @@ class ChessMixin(ToolMixin):
         diagram_lines.append("     a b c d e f g h")
         diagram = "\n".join(diagram_lines)
 
+        # Move history (last 30 entries to stay concise)
+        if self._move_history:
+            history_str = " ".join(self._move_history[-30:])
+        else:
+            history_str = "(no moves recorded yet)"
+
         return (
             f"FEN: {fen}\n"
             f"You're playing: {player}\n\n"
-            f"Board (. = empty square, uppercase = white, lowercase = black):\n"
+            f"Board (. = empty, uppercase = white, lowercase = black):\n"
             f"{diagram}\n\n"
+            f"Move history: {history_str}\n\n"
             f"Board origin: ({board['x']}, {board['y']})  "
             f"Square size: {board['sq_size']}px"
         )
+
+    @tool_function(
+        description=(
+            "Reset the move history and board state tracker. "
+            "Call this at the start of a new game so the move log starts fresh."
+        ),
+    )
+    async def reset_chess_history(self) -> str:
+        """Clear stored board state and move history."""
+        self._last_grid = None
+        self._last_player = None
+        self._move_history = []
+        self._move_number = 1
+        return "Chess move history reset."
 
     @tool_function(
         description=(
