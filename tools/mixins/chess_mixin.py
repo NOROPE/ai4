@@ -27,7 +27,7 @@ from typing import Any
 import cv2
 import numpy as np
 
-from tools.base_mixin import ToolMixin, tool_function
+from tools.base_mixin import ToolMixin, tool_function, fire_and_forget
 
 # Board background colours (BGR order for OpenCV).
 # All known square colours from various chess sites/themes — no
@@ -504,6 +504,7 @@ class ChessMixin(ToolMixin):
             "to_square": "Destination square in algebraic notation (e.g. 'e4').",
         },
     )
+    @fire_and_forget
     async def make_chess_move(self, from_square: str, to_square: str) -> str:
         """Detect board, then drag the piece from *from_square* to *to_square*."""
         from_square = from_square.lower().strip()

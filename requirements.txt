@@ -4,3 +4,5 @@ python-dotenv
 docker
 numpy
 scipy
+faster-whisper
+openai

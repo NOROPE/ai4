@@ -6,8 +6,7 @@ profile's ``tool_mixins`` list.  It:
 
 * Discovers and instantiates the requested mixins.
 * Collects their ``@tool_function``-decorated methods.
-* Auto-generates ``google.genai.types.FunctionDeclaration`` objects for
-  Gemini's ``LiveConnectConfig``.
+* Auto-generates OpenAI-compatible tool dicts for the ``tools`` parameter.
 * Dispatches incoming tool calls to the correct mixin method.
 nd implement them in the `tools/mixins/` directory.
 Make sure to add new mixins to the `MIXIN_REGISTRY` below, a
@@ -19,8 +18,6 @@ import asyncio
 import importlib
 import logging
 from typing import Any
-
-from google.genai import types
 
 from tools.base_mixin import ToolMixin
 
@@ -76,10 +73,11 @@ class Tools:
         tools = Tools(cfg.tool_mixins)
         await tools.setup()
 
-        # Pass declarations into Gemini config
-        live_config = types.LiveConnectConfig(
-            tools=[tools.get_tool_config()],
-            ...
+        # Pass tools into OpenAI request
+        response = await client.chat.completions.create(
+            model="...",
+            messages=[...],
+            tools=tools.get_tool_config() if tools.has_tools else [],
         )
 
         # When Gemini returns a tool call:
@@ -93,7 +91,7 @@ class Tools:
         self._mixins: list[ToolMixin] = []
         # name → (bound_method, meta) — populated in setup()
         self._dispatch: dict[str, Any] = {}
-        self._declarations: list[types.FunctionDeclaration] = []
+        self._declarations: list[dict] = []
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -120,7 +118,7 @@ class Tools:
             "Tools ready — %d mixin(s), %d function(s): %s",
             len(self._mixins),
             len(self._declarations),
-            [d.name for d in self._declarations],
+            [d["function"]["name"] for d in self._declarations],
         )
 
     async def teardown(self) -> None:
@@ -131,15 +129,11 @@ class Tools:
             except Exception as exc:
                 logger.warning("Mixin teardown error (%s): %s", mixin.MIXIN_NAME, exc)
 
-    # -- Gemini integration --------------------------------------------------
+    # -- tool config ---------------------------------------------------------
 
-    def get_declarations(self) -> list[types.FunctionDeclaration]:
-        """Return the list of FunctionDeclarations for Gemini config."""
+    def get_tool_config(self) -> list[dict]:
+        """Return tools as a list of dicts for the OpenAI ``tools`` parameter."""
         return list(self._declarations)
-
-    def get_tool_config(self) -> types.Tool:
-        """Return a ``types.Tool`` ready to pass into ``LiveConnectConfig.tools``."""
-        return types.Tool(function_declarations=self._declarations)
 
     @property
     def has_tools(self) -> bool:

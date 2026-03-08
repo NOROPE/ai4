@@ -3,13 +3,14 @@ tools/base_mixin.py — Base class and decorator for tool mixins.
 
 Every mixin subclasses `ToolMixin` and decorates callable methods with
 `@tool_function(...)`.  The `Tools` class introspects these decorators at
-runtime to auto-generate `google.genai.types.FunctionDeclaration` objects
-so Gemini can call them without any manual schema wiring.
+runtime to auto-generate OpenAI-compatible tool dicts so the LLM can call
+them without any manual schema wiring.
 """
 
 from __future__ import annotations
 
 import asyncio
+import functools
 import inspect
 import logging
 from dataclasses import dataclass, field
@@ -18,20 +19,18 @@ from typing import TYPE_CHECKING, Any, Callable, Coroutine, get_type_hints
 if TYPE_CHECKING:
     from config_loader import ProfileConfig
 
-from google.genai import types
-
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # @tool_function decorator — attaches schema metadata to a method
 # ---------------------------------------------------------------------------
 
-# Maps Python type annotations → google.genai Type enum values
-_PY_TO_SCHEMA: dict[type, types.Type] = {
-    str: types.Type.STRING,
-    int: types.Type.INTEGER,
-    float: types.Type.NUMBER,
-    bool: types.Type.BOOLEAN,
+# Maps Python type annotations → JSON Schema type strings
+_PY_TO_SCHEMA: dict[type, str] = {
+    str: "string",
+    int: "integer",
+    float: "number",
+    bool: "boolean",
 }
 
 
@@ -49,7 +48,7 @@ def tool_function(
     behavior: str | None = None,
 ) -> Callable:
     """
-    Mark a mixin method as a callable tool for Gemini.
+    Mark a mixin method as a callable tool for the LLM.
 
     Usage::
 
@@ -61,7 +60,7 @@ def tool_function(
             return str(a + b)
 
     The method **must** be ``async`` and return a ``str`` (the textual
-    response sent back to Gemini).
+    response sent back to the LLM).
     """
     def decorator(fn: Callable) -> Callable:
         fn._tool_meta = _ToolMeta(  # type: ignore[attr-defined]
@@ -71,6 +70,29 @@ def tool_function(
         )
         return fn
     return decorator
+
+
+def fire_and_forget(fn: Callable) -> Callable:
+    """
+    Make a tool method non-blocking: schedules the coroutine as a background
+    ``asyncio.Task`` and returns an acknowledgement string immediately.
+
+    Stack **inside** ``@tool_function``::
+
+        @tool_function(description="Move the model")
+        @fire_and_forget
+        async def set_model_position(self, x: float, y: float) -> str:
+            ...
+
+    ``functools.wraps`` is used so that ``inspect.signature`` and
+    ``get_type_hints`` still see the original parameter list.
+    """
+    @functools.wraps(fn)
+    async def wrapper(*args: Any, **kwargs: Any) -> str:
+        asyncio.create_task(fn(*args, **kwargs))
+        return "OK"
+    wrapper._is_fire_and_forget = True  # type: ignore[attr-defined]
+    return wrapper
 
 
 # ---------------------------------------------------------------------------
@@ -113,12 +135,12 @@ class ToolMixin:
                 results.append((attr_name, method, method._tool_meta))
         return results
 
-    def _build_declarations(self) -> list[types.FunctionDeclaration]:
-        """Auto-generate Gemini FunctionDeclarations from decorated methods."""
-        declarations: list[types.FunctionDeclaration] = []
+    def _build_declarations(self) -> list[dict]:
+        """Auto-generate OpenAI-compatible tool dicts from decorated methods."""
+        declarations: list[dict] = []
         for name, method, meta in self._get_tool_methods():
             hints = get_type_hints(method)
-            properties: dict[str, types.Schema] = {}
+            properties: dict[str, dict] = {}
             required: list[str] = []
 
             sig = inspect.signature(method)
@@ -126,27 +148,28 @@ class ToolMixin:
                 if param_name == "self":
                     continue
                 py_type = hints.get(param_name, str)
-                schema_type = _PY_TO_SCHEMA.get(py_type, types.Type.STRING)
-                prop_kwargs: dict[str, Any] = {"type": schema_type}
+                schema_type = _PY_TO_SCHEMA.get(py_type, "string")
+                prop: dict[str, Any] = {"type": schema_type}
                 if param_name in meta.parameter_descriptions:
-                    prop_kwargs["description"] = meta.parameter_descriptions[param_name]
-                properties[param_name] = types.Schema(**prop_kwargs)
+                    prop["description"] = meta.parameter_descriptions[param_name]
+                properties[param_name] = prop
                 if param.default is inspect.Parameter.empty:
                     required.append(param_name)
 
-            params_schema = types.Schema(
-                type=types.Type.OBJECT,
-                properties=properties,
-            )
+            parameters: dict[str, Any] = {
+                "type": "object",
+                "properties": properties,
+                "additionalProperties": False,
+            }
             if required:
-                params_schema.required = required
+                parameters["required"] = required
 
-            decl_kwargs: dict[str, Any] = dict(
-                name=name,
-                description=meta.description,
-                parameters=params_schema,
-            )
-            if meta.behavior:
-                decl_kwargs["behavior"] = meta.behavior
-            declarations.append(types.FunctionDeclaration(**decl_kwargs))
+            declarations.append({
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": meta.description,
+                    "parameters": parameters,
+                },
+            })
         return declarations

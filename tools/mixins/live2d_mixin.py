@@ -20,7 +20,7 @@ try:
     from pynput import mouse as pynput_mouse
 except ImportError:
     pynput_mouse = None
-from tools.base_mixin import ToolMixin, tool_function
+from tools.base_mixin import ToolMixin, tool_function, fire_and_forget
 
 class Live2DMixin(ToolMixin):
     """Provides tools for controlling Live2D models in VTube Studio."""
@@ -421,6 +421,7 @@ class Live2DMixin(ToolMixin):
         description="Make the Live2D model's eyes follow the mouse cursor position.",
         parameter_descriptions={},
     )
+    @fire_and_forget
     async def focus_eyes_on_mouse(self) -> str:
         if self._mouse_task and not self._mouse_task.done():
             # Loop already running — just re-enable injection
@@ -435,6 +436,7 @@ class Live2DMixin(ToolMixin):
         description="Stop the Live2D model's eyes from following the mouse cursor.",
         parameter_descriptions={},
     )
+    @fire_and_forget
     async def unfocus_eyes_from_mouse(self) -> str:
         self._mouse_tracking_active = False
         return "Eyes are no longer following the mouse cursor."
@@ -448,6 +450,7 @@ class Live2DMixin(ToolMixin):
         },
         behavior="NON_BLOCKING",
     )
+    @fire_and_forget
     async def set_model_position(self, x: float, y: float, time_in_seconds: float = 0.5) -> str:
         if not self.websocket_connection:
             return "Error: Not connected to VTube Studio."
@@ -469,6 +472,7 @@ class Live2DMixin(ToolMixin):
         },
         behavior="NON_BLOCKING",
     )
+    @fire_and_forget
     async def set_model_rotation(self, rotation: float, time_in_seconds: float = 0.5) -> str:
         if not self.websocket_connection:
             return "Error: Not connected to VTube Studio."
@@ -490,6 +494,7 @@ class Live2DMixin(ToolMixin):
         },
         behavior="NON_BLOCKING",
     )
+    @fire_and_forget
     async def set_model_size(self, size: float, time_in_seconds: float = 0.5) -> str:
         if not self.websocket_connection:
             return "Error: Not connected to VTube Studio."
@@ -512,6 +517,7 @@ class Live2DMixin(ToolMixin):
         },
         behavior="NON_BLOCKING",
     )
+    @fire_and_forget
     async def move_model_relative(self, dx: float, dy: float, time_in_seconds: float = 0.5) -> str:
         if not self.websocket_connection:
             return "Error: Not connected to VTube Studio."
@@ -533,6 +539,7 @@ class Live2DMixin(ToolMixin):
         },
         behavior="NON_BLOCKING",
     )
+    @fire_and_forget
     async def rotate_model_relative(self, rotation: float, time_in_seconds: float = 0.5) -> str:
         if not self.websocket_connection:
             return "Error: Not connected to VTube Studio."
@@ -554,6 +561,7 @@ class Live2DMixin(ToolMixin):
         },
         behavior="NON_BLOCKING",
     )
+    @fire_and_forget
     async def resize_model_relative(self, size: float, time_in_seconds: float = 0.5) -> str:
         if not self.websocket_connection:
             return "Error: Not connected to VTube Studio."
@@ -594,6 +602,7 @@ class Live2DMixin(ToolMixin):
             "timeout": "How many seconds to hold the expression before auto-deactivating it (default: 20)",
         },
     )
+    @fire_and_forget
     async def activate_expression(self, expression_file: str, timeout: float = 20.0) -> str:
         if not self.websocket_connection:
             return "Error: Not connected to VTube Studio."
@@ -629,6 +638,7 @@ class Live2DMixin(ToolMixin):
             "expression_file": "The filename of the expression to deactivate (e.g. 'happy.exp3.json')",
         },
     )
+    @fire_and_forget
     async def deactivate_expression(self, expression_file: str) -> str:
         if not self.websocket_connection:
             return "Error: Not connected to VTube Studio."

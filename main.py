@@ -11,25 +11,15 @@ import os
 import signal
 import sys
 from pathlib import Path
+from human_ai.stt import STT, INTERRUPT
+from human_ai.llm import LLM
+from human_ai.tts import TTS
 
-from dotenv import load_dotenv
-from google import genai
-from google.genai import types
-
-from ai_io import listen_and_send, receive_and_play
+from ai_io import find_device, mic_capture, audio_player, _DISCARD
 from audio.pipewire import setup_sinks, teardown_sinks
 from config_loader import ProfileConfig, VOICES, list_profiles, load_profile
 from tools import Tools
 
-# ---------------------------------------------------------------------------
-# Paths & environment
-# ---------------------------------------------------------------------------
-BASE_DIR = Path(__file__).parent
-load_dotenv(BASE_DIR / ".env")
-
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if not GEMINI_API_KEY:
-    sys.exit("[ERROR] No Google API key found. Set GEMINI_API_KEY in .env")
 
 # ---------------------------------------------------------------------------
 # Custom log level for transcriptions
@@ -169,7 +159,7 @@ def teardown_audio(cfg: ProfileConfig, logger: logging.Logger) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Gemini Live session
+# AI Live session
 # ---------------------------------------------------------------------------
 
 
@@ -179,75 +169,94 @@ async def run_session(
     logger: logging.Logger,
     tools: Tools,
 ) -> None:
-    """Connect to Gemini Live API and run audio I/O; reconnect on failure."""
-    client = genai.Client(api_key=GEMINI_API_KEY)
+    """Connect the STT → LLM → TTS pipeline and run until stop_event is set."""
+    # Discover audio devices
+    input_device = find_device(cfg.pipewire_sink_input, kind="input")
+    output_device = find_device(cfg.pipewire_sink_output, kind="output")
 
     buffer_fill_bytes = int(cfg.receive_sample_rate * 2 * cfg.audio_buffer_seconds)
 
-    # Load previous conversation context for this profile
-    prev_context = ""
-    if cfg.prevmsg_file.exists():
-        prev_context = cfg.prevmsg_file.read_text(encoding="utf-8").strip()
+    # Queues
+    mic_queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=20)
+    stt_result_queue: asyncio.Queue = asyncio.Queue()
+    audio_out_queue: asyncio.Queue = asyncio.Queue()
 
-    system_instruction = cfg.system_instruction
-    if prev_context:
-        system_instruction += f"\n\nPrevious conversation context:\n{prev_context}"
+    # Components
+    base_url: str = cfg.raw.get("base_url", "http://localhost:11434/v1")
+    llm = LLM(base_url=base_url, config=cfg, tools=tools)
+    await llm.setup()  # also calls tools.setup()
+    stt = STT(config=cfg)
+    tts = TTS(config=cfg)
 
-    live_config = types.LiveConnectConfig(
-        response_modalities=[types.Modality.AUDIO],
-        system_instruction=system_instruction,
-        speech_config=types.SpeechConfig(
-            voice_config=types.VoiceConfig(
-                prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                    voice_name=cfg.voice,
-                )
-            )
+    # Event set while the LLM/TTS is generating — STT uses it to emit INTERRUPT.
+    llm_generating = asyncio.Event()
+
+    async def _llm_tts_turn(text: str) -> None:
+        """Run one LLM generate + TTS pass, bracketed by the generating flag."""
+        llm_generating.set()
+        try:
+            token_queue: asyncio.Queue = asyncio.Queue()
+            llm.generate(text, token_queue)
+            await tts.run(token_queue, audio_out_queue)
+        finally:
+            llm_generating.clear()
+
+    # Background I/O tasks
+    mic_task = asyncio.create_task(
+        mic_capture(mic_queue, input_device, cfg.send_sample_rate, cfg.chunk_size, stop_event),
+        name="mic_capture",
+    )
+    player_task = asyncio.create_task(
+        audio_player(
+            audio_out_queue, output_device,
+            cfg.receive_sample_rate, buffer_fill_bytes,
+            cfg.buffer_clear_timeout_seconds,
         ),
-        output_audio_transcription=types.AudioTranscriptionConfig(),
-        input_audio_transcription=types.AudioTranscriptionConfig(),
-        tools=[tools.get_tool_config()] if tools.has_tools else [],
+        name="audio_player",
+    )
+    stt_task = asyncio.create_task(
+        stt.run(mic_queue, stt_result_queue, llm_generating),
+        name="stt",
     )
 
-    while not stop_event.is_set():
-        try:
-            logger.info("Connecting to Gemini Live API (model=%s)...", cfg.model)
-            async with client.aio.live.connect(model=cfg.model, config=live_config) as session:
-                logger.info("Connected. Start speaking!")
-                listen_task = asyncio.create_task(
-                    listen_and_send(session, None, cfg.send_sample_rate, cfg.chunk_size)
-                )
-                play_task = asyncio.create_task(
-                    receive_and_play(
-                        session, None,
-                        cfg.receive_sample_rate, buffer_fill_bytes,
-                        cfg.buffer_clear_timeout_seconds, logger,
-                        tools,
-                    )
-                )
-                done, pending = await asyncio.wait(
-                    [listen_task, play_task, asyncio.create_task(stop_event.wait())],
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                for t in pending:
-                    t.cancel()
-                for t in done:
-                    if not t.cancelled() and t.exception():
-                        raise t.exception()  # type: ignore[misc]
-
-        except asyncio.CancelledError:
-            break
-        except Exception as exc:
-            if stop_event.is_set():
-                break
-            logger.error(
-                "Session error: %s — reconnecting in %.1fs", exc, cfg.reconnect_interval_seconds
-            )
+    logger.info("Session started. Listening...")
+    silence_ping_interval: float = float(cfg.raw.get("silence_ping_interval", 5.0))
+    last_activity = asyncio.get_event_loop().time()
+    try:
+        while not stop_event.is_set():
             try:
-                await asyncio.wait_for(
-                    stop_event.wait(), timeout=cfg.reconnect_interval_seconds
-                )
+                result = await asyncio.wait_for(stt_result_queue.get(), timeout=0.2)
             except asyncio.TimeoutError:
-                pass
+                # No speech — ping the LLM with "..." if silent long enough and idle
+                if (
+                    not llm_generating.is_set()
+                    and asyncio.get_event_loop().time() - last_activity >= silence_ping_interval
+                ):
+                    last_activity = asyncio.get_event_loop().time()
+                    logger.debug("Silence ping → LLM")
+                    asyncio.create_task(_llm_tts_turn("..."), name="llm_tts_turn")
+                continue
+
+            last_activity = asyncio.get_event_loop().time()
+
+            if result is INTERRUPT:
+                # User spoke mid-response — stop the LLM and drop buffered audio
+                logger.info("STT interrupt: stopping LLM and discarding audio buffer.")
+                llm.interrupt()
+                audio_out_queue.put_nowait(_DISCARD)
+                continue
+
+            if not isinstance(result, str) or not result.strip():
+                continue
+
+            logger.info("STT → LLM: %r", result)
+            asyncio.create_task(_llm_tts_turn(result), name="llm_tts_turn")
+    finally:
+        mic_task.cancel()
+        stt_task.cancel()
+        player_task.cancel()
+        await llm.shutdown()  # also calls tools.teardown()
+        await asyncio.gather(mic_task, stt_task, player_task, return_exceptions=True)
 
 
 # ---------------------------------------------------------------------------
@@ -272,13 +281,11 @@ async def main() -> None:
     logger = setup_logging(cfg)
     logger.info("AI4 starting up with profile '%s'.", cfg.name)
     logger.info("Transcription log: %s", cfg.transcription_log_file)
-    logger.info("API key present: %s", bool(GEMINI_API_KEY))
 
     setup_audio(cfg, logger)
 
-    # Tool system — instantiate and set up mixins from profile
+    # Tool system — instantiate mixins from profile (setup called inside run_session via LLM)
     tools = Tools(cfg.tool_mixins, config=cfg)
-    await tools.setup()
 
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -294,7 +301,6 @@ async def main() -> None:
 
     await run_session(cfg, stop_event, logger, tools)
 
-    await tools.teardown()
     teardown_audio(cfg, logger)
     logger.info("AI4 shut down cleanly.")
 

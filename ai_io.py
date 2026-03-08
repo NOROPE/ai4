@@ -1,24 +1,22 @@
 """
-ai_io.py — Sounddevice I/O for Gemini Live API.
-Handles mic capture → Gemini and Gemini audio → speakers,
-including buffering, flush/discard sentinels, and transcription logging.
+ai_io.py — Sounddevice I/O helpers for the STT → LLM → TTS pipeline.
+
+Provides:
+  mic_capture   — streams raw PCM from the microphone into an asyncio.Queue
+  audio_player  — reads PCM chunks (plus _FLUSH / _DISCARD sentinels) and
+                  plays them through a sounddevice output stream
+  find_device   — resolves a PipeWire/PulseAudio device name to a device index
 """
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING
 
 import numpy as np
 import sounddevice as sd
 
-from audio.transcription import TranscriptionBuffer
-
-if TYPE_CHECKING:
-    from tools import Tools
-
 logger = logging.getLogger(__name__)
 
-# Sentinels for the playback queue
+# Sentinels for the audio_player queue
 _FLUSH = object()    # end of turn: play remaining buffered audio
 _DISCARD = object()  # interruption: drop buffered audio
 
@@ -46,139 +44,91 @@ def find_device(name: str | None = None, kind: str = "output") -> int | None:
     return None
 
 
-async def listen_and_send(
-    session,
+async def mic_capture(
+    mic_queue: asyncio.Queue,
     input_device: int | None,
-    send_sample_rate: int,
+    sample_rate: int,
     chunk_size: int,
+    stop_event: asyncio.Event | None = None,
 ) -> None:
-    """Capture mic audio and stream it to the Gemini session."""
-    mic_queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=10)
+    """
+    Capture microphone audio and push raw PCM bytes into *mic_queue*.
+    Runs until *stop_event* is set (or forever if None).
+    """
     loop = asyncio.get_running_loop()
 
-    def _mic_callback(indata: np.ndarray, frames: int, time, status) -> None:  # noqa: ANN001
+    def _callback(indata: np.ndarray, frames: int, time, status) -> None:  # noqa: ANN001
         if status:
             logger.debug("Mic status: %s", status)
+        data = bytes(indata)
         loop.call_soon_threadsafe(
-            lambda d=bytes(indata): mic_queue.put_nowait(d) if not mic_queue.full() else None
+            lambda d=data: None if mic_queue.full() else mic_queue.put_nowait(d)
         )
 
     with sd.RawInputStream(
-        samplerate=send_sample_rate,
+        samplerate=sample_rate,
         channels=1,
         dtype="int16",
         blocksize=chunk_size,
         device=input_device,
-        callback=_mic_callback,
+        callback=_callback,
     ):
         logger.info("Microphone open (device=%s).", input_device)
-        while True:
-            data = await mic_queue.get()
-            await session.send_realtime_input(audio={"data": data, "mime_type": "audio/pcm"})
+        if stop_event is not None:
+            await stop_event.wait()
+        else:
+            await asyncio.get_event_loop().create_future()  # run forever
 
 
-async def receive_and_play(
-    session,
+async def audio_player(
+    play_queue: asyncio.Queue,
     output_device: int | None,
-    receive_sample_rate: int,
+    sample_rate: int,
     buffer_fill_bytes: int,
     buffer_clear_timeout: float,
-    transcription_logger: logging.Logger,
-    tools: Tools | None = None,
 ) -> None:
     """
-    Receive audio and transcriptions from Gemini.
-    Buffers audio until buffer_fill_bytes is accumulated before playing.
-    At end of turn, flushes remaining audio. After buffer_clear_timeout
-    seconds of silence, discards stale buffered audio (handles interruptions).
+    Play audio chunks from *play_queue* through a sounddevice output stream.
+
+    Sentinels:
+      _FLUSH   — play any buffered audio immediately (end of TTS turn)
+      _DISCARD — drop buffered audio without playing (interruption)
     """
-    play_queue: asyncio.Queue = asyncio.Queue()
-
-    async def _player() -> None:
-        buffer = bytearray()
-        stream = sd.RawOutputStream(
-            samplerate=receive_sample_rate,
-            channels=1,
-            dtype="int16",
-            device=output_device,
-            latency="high",  # larger internal buffer reduces underruns
-        )
-        stream.start()
-        try:
-            while True:
-                chunk = await play_queue.get()
-                if chunk is _DISCARD:
-                    buffer.clear()
-                    continue
-                if chunk is _FLUSH:
-                    if buffer:
-                        await asyncio.to_thread(stream.write, bytes(buffer))
-                        buffer.clear()
-                    continue
-                buffer.extend(chunk)
-                if len(buffer) >= buffer_fill_bytes:
-                    await asyncio.to_thread(stream.write, bytes(buffer))
-                    buffer.clear()
-        finally:
-            if buffer:
-                await asyncio.to_thread(stream.write, bytes(buffer))
-            stream.stop()
-            stream.close()
-
-    player_task = asyncio.create_task(_player())
-
-    async def _clear_on_idle() -> None:
+    async def _idle_discard() -> None:
+        """After buffer_clear_timeout seconds of queue silence, discard stale audio."""
         while True:
             await asyncio.sleep(buffer_clear_timeout)
             if play_queue.empty():
                 play_queue.put_nowait(_DISCARD)
 
-    idle_task = asyncio.create_task(_clear_on_idle())
-
-    user_buf = TranscriptionBuffer("User", transcription_logger)
-    gemini_buf = TranscriptionBuffer("Gemini", transcription_logger)
-
+    idle_task = asyncio.create_task(_idle_discard())
+    buffer = bytearray()
+    stream = sd.RawOutputStream(
+        samplerate=sample_rate,
+        channels=1,
+        dtype="int16",
+        device=output_device,
+        latency="high",
+    )
+    stream.start()
     try:
         while True:
-            turn = session.receive()
-            async for response in turn:
-                sc = response.server_content
-                if sc:
-                    if sc.model_turn:
-                        for part in sc.model_turn.parts:
-                            if part.inline_data and isinstance(part.inline_data.data, bytes):
-                                play_queue.put_nowait(part.inline_data.data)
-                            elif part.text:
-                                logger.info("Gemini: %s", part.text)
-
-                    if sc.input_transcription and sc.input_transcription.text:
-                        user_buf.append(sc.input_transcription.text)
-
-                    if sc.output_transcription and sc.output_transcription.text:
-                        gemini_buf.append(sc.output_transcription.text)
-
-                # Handle tool calls from Gemini
-                tc = response.tool_call
-                if tc and tools:
-                    for fn_call in tc.function_calls:
-                        result = await tools.handle_call(
-                            fn_call.name, dict(fn_call.args)
-                        )
-                        from google.genai import types
-                        await session.send_tool_response(
-                            function_responses=[
-                                types.FunctionResponse(
-                                    id=fn_call.id,
-                                    name=fn_call.name,
-                                    response={"result": result},
-                                )
-                            ]
-                        )
-
-            # Turn ended — flush audio tail then complete transcriptions
-            play_queue.put_nowait(_FLUSH)
-            user_buf.flush()
-            gemini_buf.flush()
+            chunk = await play_queue.get()
+            if chunk is _DISCARD:
+                buffer.clear()
+                continue
+            if chunk is _FLUSH:
+                if buffer:
+                    await asyncio.to_thread(stream.write, bytes(buffer))
+                    buffer.clear()
+                continue
+            buffer.extend(chunk)
+            if len(buffer) >= buffer_fill_bytes:
+                await asyncio.to_thread(stream.write, bytes(buffer))
+                buffer.clear()
     finally:
         idle_task.cancel()
-        player_task.cancel()
+        if buffer:
+            await asyncio.to_thread(stream.write, bytes(buffer))
+        stream.stop()
+        stream.close()

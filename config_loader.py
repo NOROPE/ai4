@@ -9,6 +9,7 @@ Resolution order (later wins):
 """
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -66,46 +67,52 @@ _DEFAULTS: dict = {
 @dataclass
 class ProfileConfig:
     """Fully resolved configuration for a single profile."""
-    name: str
+    name: str = "default"
 
-    # Gemini
-    model: str
-    system_instruction: str
+    # AI
+    model: str = "gemini-2.5-flash-native-audio-preview-12-2025"
+    system_instruction: str = "You are a helpful and friendly AI assistant."
 
     # Audio
-    send_sample_rate: int
-    receive_sample_rate: int
-    chunk_size: int
-    audio_buffer_seconds: float
-    buffer_clear_timeout_seconds: float
+    send_sample_rate: int = 16000
+    receive_sample_rate: int = 24000
+    chunk_size: int = 1024
+    audio_buffer_seconds: float = 1.5
+    buffer_clear_timeout_seconds: float = 2.0
 
     # Connection
-    reconnect_interval_seconds: float
+    reconnect_interval_seconds: float = 2.0
 
     # Paths (all absolute, profile-isolated)
-    logs_dir: Path
-    transcription_log_file: Path
-    prevmsg_file: Path
-    prevmsg_count: int
+    logs_dir: Path = Path(os.devnull)
+    transcription_log_file: Path = Path(os.devnull)
+    prevmsg_file: Path = Path(os.devnull)
+    prevmsg_count: int = 30
 
     # PipeWire — each profile gets its own virtual sinks
-    pipewire_sink_output: str
-    pipewire_sink_input: str
+    pipewire_sink_output: str = "AIOutput-default"
+    pipewire_sink_input: str = "AIInput-default"
 
     # Docker — each profile gets its own container
-    docker_container_name: str
+    docker_container_name: str = "ai4-default"
 
     # Voice — None means prompt at startup
-    voice: str | None
+    voice: str | None = None
 
     # Tool mixins — list of mixin names to activate (e.g. ["system_info"])
-    tool_mixins: list[str]
+    tool_mixins: list[str] = None  # type: ignore[assignment]
 
     # Behaviour flags
-    teardown_sinks_on_exit: bool  # whether to remove virtual sinks on shutdown
+    teardown_sinks_on_exit: bool = True  # whether to remove virtual sinks on shutdown
 
     # Raw merged dict (for forward-compatible access to unknown keys)
-    raw: dict
+    raw: dict = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        if self.tool_mixins is None:
+            self.tool_mixins = []
+        if self.raw is None:
+            self.raw = {}
 
 
 def load_profile(name: str = "default") -> ProfileConfig:

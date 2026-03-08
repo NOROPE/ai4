@@ -1,30 +1,22 @@
-Zephyr       -- Bright
-Puck         -- Upbeat
-Charon       -- Informative
-Kore         -- Firm
-Fenrir       -- Excitable
-Leda         -- Youthful
-Orus         -- Firm
-Aoede        -- Breezy
-Callirrhoe   -- Easy-going
-Autonoe      -- Bright
-Enceladus    -- Breathy
-Iapetus      -- Clear
-Umbriel      -- Easy-going
-Algieba      -- Smooth
-Despina      -- Smooth
-Erinome      -- Clear
-Algenib      -- Gravelly
-Rasalgethi   -- Informative
-Laomedeia    -- Upbeat
-Achernar     -- Soft
-Alnilam      -- Firm
-Schedar      -- Even
-Gacrux       -- Mature
-Pulcherrima  -- Forward
-Achird       -- Friendly
-Zubenelgenubi -- Casual
-Vindemiatrix -- Gentle
-Sadachbia    -- Lively
-Sadaltager   -- Knowledgeable
-Sulafat      -- Warm
+Name          Traits    Target Quality  Training Duration  Overall Grade
+------------- --------- --------------- ------------------ -------------
+af_heart      🚺❤️                                         A
+af_alloy      🚺        B               MM minutes         C
+af_aoede      🚺        B               H hours            C+
+af_bella      🚺 🔥     A               HH hours           A-
+af_jessica    🚺        C               MM minutes         D
+af_kore       🚺        B               H hours            C+
+af_nicole     🚺 🎧     B               HH hours           B-
+af_nova       🚺        B               MM minutes         C
+af_river      🚺        C               MM minutes         D
+af_sarah      🚺        B               H hours            C+
+af_sky        🚺        B               M minutes 🤏       C-
+am_adam       🚹        D               H hours            F+
+am_echo       🚹        C               MM minutes         D
+am_eric       🚹        C               MM minutes         D
+am_fenrir     🚹        B               H hours            C+
+am_liam       🚹        C               MM minutes         D
+am_michael    🚹        B               H hours            C+
+am_onyx       🚹        C               MM minutes         D
+am_puck       🚹        B               H hours            C+
+am_santa      🚹        C               M minutes 🤏       D-
