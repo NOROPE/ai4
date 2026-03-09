@@ -77,8 +77,8 @@ def setup_logging(cfg: ProfileConfig) -> logging.Logger:
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("openai").setLevel(logging.WARNING)
-
     return logging.getLogger(f"ai4.{cfg.name}")
+
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +169,7 @@ async def main() -> None:
 
     teardown_audio(cfg, logger)
     logger.info("AI4 shut down cleanly.")
+
 
 
 if __name__ == "__main__":

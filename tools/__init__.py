@@ -14,7 +14,6 @@ Make sure to add new mixins to the `MIXIN_REGISTRY` below, a
 
 from __future__ import annotations
 
-import asyncio
 import importlib
 import logging
 from typing import Any

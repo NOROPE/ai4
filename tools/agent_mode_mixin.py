@@ -1,36 +1,14 @@
-"""
-tools/base_mixin.py — Base class and decorator for tool mixins.
 
-Every mixin subclasses `ToolMixin` and decorates callable methods with
-`@tool_function(...)`.  The `Tools` class introspects these decorators at
-runtime to auto-generate OpenAI-compatible tool dicts so the LLM can call
-them without any manual schema wiring.
-"""
 
-from __future__ import annotations
 
-import asyncio
-import functools
-import inspect
-import logging
+from tools.base_mixin import ToolMixin, tool_function
 from dataclasses import dataclass, field
-from typing import Any, Callable, get_type_hints
-from config_loader import ProfileConfig
-logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# @tool_function decorator — attaches schema metadata to a method
-# ---------------------------------------------------------------------------
-
-# Maps Python type annotations → JSON Schema type strings
-_PY_TO_SCHEMA: dict[type, str] = {
-    str: "string",
-    int: "integer",
-    float: "number",
-    bool: "boolean",
-}
+from typing import Callable, get_type_hints
+import inspect
+import openai
 
 
+# agent tool function decorator
 @dataclass
 class _ToolMeta:
     """Metadata stashed on a decorated method by @tool_function."""
@@ -39,17 +17,16 @@ class _ToolMeta:
     behavior: str | None = None
 
 
-def tool_function(
+def agent_tool_function(
     description: str,
     parameter_descriptions: dict[str, str] | None = None,
     behavior: str | None = None,
 ) -> Callable:
     """
-    Mark a mixin method as a callable tool for the LLM.
-
+    Mark a mixin method as a callable tool for the LLM's subagent.
     Usage::
 
-        @tool_function(
+        @agent_tool_function(
             description="Add two numbers together",
             parameter_descriptions={"a": "First number", "b": "Second number"},
         )
@@ -68,60 +45,40 @@ def tool_function(
         return fn
     return decorator
 
-
-def fire_and_forget(fn: Callable) -> Callable:
+class AgentModeMixin(ToolMixin):
     """
-    Make a tool method non-blocking: schedules the coroutine as a background
-    ``asyncio.Task`` and returns an acknowledgement string immediately.
-
-    Stack **inside** ``@tool_function``::
-
-        @tool_function(description="Move the model")
-        @fire_and_forget
-        async def set_model_position(self, x: float, y: float) -> str:
-            ...
-
-    ``functools.wraps`` is used so that ``inspect.signature`` and
-    ``get_type_hints`` still see the original parameter list.
+    A subclass of ToolMixin that adds agent mode functionality
+    Override class attributes AGENT_DESC and PARAM_DESC to set custom descriptions for the agent. (by setting the class attributes)
+    call setup_agent() in setup() to initialize the agent.
+    call teardown_agent() in teardown() to clean up the agent.
     """
-    @functools.wraps(fn)
-    async def wrapper(*args: Any, **kwargs: Any) -> str:
-        asyncio.create_task(fn(*args, **kwargs))
-        return "OK"
-    wrapper._is_fire_and_forget = True  # type: ignore[attr-defined]
-    return wrapper
+    
+    AGENT_DESC = "Base description"
+    PARAM_DESC = "Base parameter info"
+    
+    def __init__(self, config):
+        super().__init__(config)
+        self.agent = None # this is bad practice
+        self.agent_config = config.raw.get("subagent_config", {})
+        self.agent_name = self.agent_config.get("subagent_name", "")
+        self.agent_url = self.agent_config.get("subagent_url", "")
+    async def setup_agent(self) -> None:
+        
+        
+    async def teardown_agent(self) -> None:
+        print("teardown") 
+        
+    @tool_function(
+            description="Placeholder",  # This will be overwritten in __init__
+            parameter_descriptions={"what_to_do": "Placeholder"}
+        )
+    async def do(self, what_to_do: str) -> str:
+            # Your implementation here
+            return f"Executed: {what_to_do}"
+            
+    # -- introspection helpers (used by agent) -------------------------
 
-
-# ---------------------------------------------------------------------------
-# ToolMixin base class
-# ---------------------------------------------------------------------------
-
-
-class ToolMixin:
-    """
-    Base class for all tool mixins.
-
-    Subclasses should:
-    1. Override `MIXIN_NAME` with a short identifier (used in config).
-    2. Decorate async methods with `@tool_function(...)`.
-    3. Optionally override `setup()` / `teardown()` for lifecycle hooks.
-    """
-
-    MIXIN_NAME: str = ""
-
-    def __init__(self, config: ProfileConfig = None, **kwargs: Any) -> None:
-        self.config = config
-        self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
-
-    async def setup(self) -> None:
-        """Called once after the mixin is instantiated. Override for init work."""
-
-    async def teardown(self) -> None:
-        """Called on shutdown. Override for cleanup."""
-
-    # -- introspection helpers (used by Tools class) -------------------------
-
-    def _get_tool_methods(self) -> list[tuple[str, Callable, _ToolMeta]]:
+    def _get_agent_tool_methods(self) -> list[tuple[str, Callable, _ToolMeta]]:
         """Return ``(name, bound_method, meta)`` for every @tool_function method."""
         results: list[tuple[str, Callable, _ToolMeta]] = []
         for attr_name in dir(self):
@@ -170,3 +127,5 @@ class ToolMixin:
                 },
             })
         return declarations
+
+            

@@ -1,0 +1,28 @@
+Agentic tools restructure.
+
+New mixin format - has 1 tool.
+    str -> tool -> str
+
+This tool
+    string input ->
+    Per-Tool agent ->
+    Thinking and executing tools ->
+Tool output ->
+    - Status
+    - Actual useful output
+
+How this will be managed:
+    - The agent is prompted every time the MainTool is run
+    - These agents are defined by individual mixins
+        - Allows configuration of
+            - Agent model
+            - Agent location / port
+        - These agents have access to the @tool_functions (exept from the agent tool call)
+
+TODO:
+    1. Define a new 2nd level mixin for agents
+    2. Add new @run_from_agent decorator in the new mixin
+    3. Add configuration options per mixin to the profiles
+        - API key retrieval from .env
+    4. Add retrieval of this information to the base mixin
+    5. Implement agent 
